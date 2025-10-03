@@ -325,9 +325,9 @@ const PORT = process.env.PORT || 300;
       console.log('⏭️ Database sync skipped (use ENABLE_DB_SYNC=true to enable)');
     }
     
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
-      console.log(`📚 API Documentation: http://localhost:${PORT}/health`);
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
+      console.log(`📚 API Documentation: http://0.0.0.0:${PORT}/health`);
       console.log(`🔒 Authentication required for protected routes`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     });
