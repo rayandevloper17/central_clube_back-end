@@ -1,15 +1,15 @@
 // controllers/noteUtilisateurController.js
-import NoteUtilisateur from '../models/noteUtilisateur.js';
+import NoteUtilisateur from '../models/note_utilisateur.js';
 
 export const createNote = async (req, res) => {
   try {
-    const { id_match, id_noteur, id_notee, note } = req.body;
+    const { id_noteur, note, id_reservation } = req.body;
 
-    if (!id_match || !id_noteur || !id_notee || !note) {
+    if (!id_noteur || !note || !id_reservation) {
       return res.status(400).json({ message: "All fields are required." });
     }
 
-    const newNote = await NoteUtilisateur.create({ id_match, id_noteur, id_notee, note });
+    const newNote = await NoteUtilisateur.create({id_noteur, note, id_reservation });
     res.status(201).json({ message: 'Note created successfully', note: newNote });
   } catch (err) {
     console.error('Create Note Error:', err);

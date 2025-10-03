@@ -27,5 +27,47 @@ export default function createNoteUtilisateurRoutes(models) {
     }
   });
 
+  // GET /api/notes/:id
+  router.get('/:id', async (req, res) => {
+    try {
+      const note = await noteUtilisateurService.getNoteById(req.params.id);
+      res.json(note);
+    } catch (err) {
+      res.status(404).json({ error: err.message });
+    }
+  });
+    // GET /api/notes/user/:userId
+    router.get('/user/:userId', async (req, res) => {
+      try {
+        const notes = await noteUtilisateurService.getNotesByUserId(req.params.userId);
+        res.json(notes);
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+  // GET /api/notes/:id
+  router.get('/:id', async (req, res) => {
+    try {
+      const note = await noteUtilisateurService.getNoteById(req.params.id);
+      if (!note) {
+        return res.status(404).json({ error: 'Note not found' });
+      }
+      res.json(note);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DELETE /api/notes/:id
+  router.delete('/:id', async (req, res) => {
+    try {
+      await noteUtilisateurService.deleteNote(req.params.id);
+      res.status(204).send();
+    } catch (err) {
+      res.status(404).json({ error: err.message });
+    }
+  });
+
   return router;
 }

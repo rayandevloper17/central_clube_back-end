@@ -1,5 +1,5 @@
 export const createMatchService = async (models, data) => {
-  const reservation = await models.Reservation.findByPk(data.id_reservation);
+  const reservation = await models.reservation.findByPk(data.id_reservation);
   if (!reservation) throw new Error('Reservation not found');
 
   const match = await models.Match.create({

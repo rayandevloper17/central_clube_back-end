@@ -1,9 +1,7 @@
-import _sequelize from 'sequelize';
-const { Model, Sequelize } = _sequelize;
+import { Sequelize, DataTypes } from 'sequelize';
 
-export default class Utilisateur extends Model {
-  static init(sequelize, DataTypes) {
-  return super.init({
+export default function(sequelize) {
+  return sequelize.define('utilisateur', {
     id: {
       autoIncrement: true,
       type: DataTypes.BIGINT,
@@ -34,10 +32,14 @@ export default class Utilisateur extends Model {
       type: DataTypes.TEXT,
       allowNull: false
     },
-    credit: {
+    credit_gold_padel: {
       type: DataTypes.DOUBLE,
       allowNull: true,
       defaultValue: 0
+    },
+     credit_silver_padel: {
+      type: DataTypes.DOUBLE,
+      allowNull: true
     },
     points: {
       type: DataTypes.BIGINT,
@@ -56,17 +58,27 @@ export default class Utilisateur extends Model {
     date_creation: {
       type: DataTypes.DATE,
       allowNull: true,
-      defaultValue: Sequelize.Sequelize.literal('CURRENT_TIMESTAMP')
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     },
     date_misajour: {
       type: DataTypes.DATE,
       allowNull: true,
-      defaultValue: Sequelize.Sequelize.literal('CURRENT_TIMESTAMP')
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    },
+    credit_gold_soccer: {
+      type: DataTypes.DOUBLE,
+      allowNull: true
+    },
+   
+    credit_silver_soccer: {
+      type: DataTypes.DOUBLE,
+      allowNull: true
     }
   }, {
     sequelize,
     tableName: 'utilisateur',
     schema: 'public',
+    hasTrigger: true,
     timestamps: false,
     indexes: [
       {
@@ -91,5 +103,4 @@ export default class Utilisateur extends Model {
       },
     ]
   });
-  }
-}
+};

@@ -1,9 +1,7 @@
-import _sequelize from 'sequelize';
-const { Model, Sequelize } = _sequelize;
+import { Sequelize, DataTypes } from 'sequelize';
 
-export default class Terrain extends Model {
-  static init(sequelize, DataTypes) {
-  return super.init({
+export default function(sequelize) {
+  return sequelize.define('terrain', {
     id: {
       autoIncrement: true,
       type: DataTypes.BIGINT,
@@ -15,7 +13,7 @@ export default class Terrain extends Model {
       allowNull: false
     },
     type: {
-      type: DataTypes.STRING(50),
+      type: DataTypes.TEXT,
       allowNull: false
     },
     image_url: {
@@ -37,5 +35,4 @@ export default class Terrain extends Model {
       },
     ]
   });
-  }
-}
+};

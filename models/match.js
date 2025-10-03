@@ -1,9 +1,6 @@
-import _sequelize from 'sequelize';
-const { Model, Sequelize } = _sequelize;
-
-export default class Match extends Model {
-  static init(sequelize, DataTypes) {
-  return super.init({
+const Sequelize = require('sequelize');
+module.exports = function(sequelize, DataTypes) {
+  return sequelize.define('match', {
     id: {
       autoIncrement: true,
       type: DataTypes.BIGINT,
@@ -49,6 +46,7 @@ export default class Match extends Model {
     sequelize,
     tableName: 'match',
     schema: 'public',
+    hasTrigger: true,
     timestamps: false,
     indexes: [
       {
@@ -66,5 +64,4 @@ export default class Match extends Model {
       },
     ]
   });
-  }
-}
+};

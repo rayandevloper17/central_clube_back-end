@@ -1,32 +1,50 @@
-import _sequelize from 'sequelize';
-const { Model, Sequelize } = _sequelize;
+import { Sequelize, DataTypes } from 'sequelize';
 
-export default class Participant extends Model {
-  static init(sequelize, DataTypes) {
-  return super.init({
+export default function(sequelize) {
+  return sequelize.define('participant', {
     id: {
       autoIncrement: true,
       type: DataTypes.BIGINT,
       allowNull: false,
       primaryKey: true
     },
-    id_match: {
-      type: DataTypes.BIGINT,
-      allowNull: false
-    },
+
     id_utilisateur: {
       type: DataTypes.BIGINT,
-      allowNull: false
+      allowNull: false,
+      references: {
+        model: 'utilisateur',
+        key: 'id'
+      }
     },
+    
     rejoins: {
       type: DataTypes.DATE,
       allowNull: true,
-      defaultValue: Sequelize.Sequelize.literal('CURRENT_TIMESTAMP')
+      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     },
     est_createur: {
       type: DataTypes.BOOLEAN,
       allowNull: true,
       defaultValue: false
+    }, 
+    id_reservation: {
+      type: DataTypes.BIGINT,
+      allowNull: false,
+      references: {
+        model: 'reservation',
+        key: 'id'
+      }
+    },
+    statepaiement: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+      defaultValue: 1
+    },
+    typepaiement: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+      defaultValue: 1
     }
   }, {
     sequelize,
@@ -35,9 +53,9 @@ export default class Participant extends Model {
     timestamps: false,
     indexes: [
       {
-        name: "idx_participant_match",
+        name: "idx_participant_reservation",
         fields: [
-          { name: "id_match" },
+          { name: "id_reservation" },
         ]
       },
       {
@@ -49,5 +67,4 @@ export default class Participant extends Model {
       },
     ]
   });
-  }
-}
+};
