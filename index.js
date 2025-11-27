@@ -167,9 +167,18 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow non-browser clients (no origin) and any origin in the whitelist
+    // Allow non-browser clients (no origin)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // Normalize origin (strip trailing slash)
+    const normalized = origin.replace(/\/$/, '');
+
+    // Allow any localhost/127.0.0.1 origin regardless of port
+    if (normalized.startsWith('http://localhost') || normalized.startsWith('http://127.0.0.1')) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(normalized)) return callback(null, true);
     return callback(new Error(`Not allowed by CORS: ${origin}`));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
