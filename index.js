@@ -173,8 +173,13 @@ const corsOptions = {
     // Normalize origin (strip trailing slash)
     const normalized = origin.replace(/\/$/, '');
 
-    // Allow any localhost/127.0.0.1 origin regardless of port
-    if (normalized.startsWith('http://localhost') || normalized.startsWith('http://127.0.0.1')) {
+    // Allow any localhost/127.0.0.1 origin regardless of port (http or https)
+    if (
+      normalized.startsWith('http://localhost') ||
+      normalized.startsWith('https://localhost') ||
+      normalized.startsWith('http://127.0.0.1') ||
+      normalized.startsWith('https://127.0.0.1')
+    ) {
       return callback(null, true);
     }
 
@@ -185,6 +190,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
   credentials: true,
   maxAge: 24 * 60 * 60, // cache preflight for 1 day
+  optionsSuccessStatus: 204, // explicitly return 204 for successful preflight
 };
 
 app.use(cors(corsOptions));
