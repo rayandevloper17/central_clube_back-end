@@ -154,27 +154,33 @@ const reservationController = ReservationController(reservationService);
 // Create Express app
 const app = express();
 
-// ✅ IMPROVED CORS CONFIGURATION
+// ✅ IMPROVED CORS CONFIGURATION (function-based origin to support lists)
+const allowedOrigins = [
+  'http://localhost:300',
+  'http://localhost:3001',
+  'http://localhost:8080',
+  'http://localhost:4200',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  process.env.FRONTEND_URL,
+].filter(Boolean);
+
 const corsOptions = {
-  origin: [
-    'http://localhost:300',
-    'http://localhost:3001', 
-    'http://localhost:8080',
-    'http://localhost:4200',
-    // Add your frontend URLs here
-    process.env.FRONTEND_URL // Add this to your .env file
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type', 
-    'Authorization', 
-    'X-Requested-With',
-    'Accept'
-  ],
-  credentials: true
+  origin: (origin, callback) => {
+    // Allow non-browser clients (no origin) and any origin in the whitelist
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  credentials: true,
+  maxAge: 24 * 60 * 60, // cache preflight for 1 day
 };
 
 app.use(cors(corsOptions));
+// Ensure preflight requests are handled for all routes
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
