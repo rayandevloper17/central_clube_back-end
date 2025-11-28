@@ -23,6 +23,7 @@ import ReservationRoutes from './routes/reservation.routes.js';
 import matchRoutes from './routes/matchRoutes.js';
 import reservationUtilisateurRoutes from './routes/reservationUtilisateur.routes.js';
 import createVerificationEmailRoutes from './routes/emailVerification.route.js';
+import createImageProxyRoutes from './routes/imageProxy.routes.js';
 
 // Initialize Sequelize
 const sequelize = new Sequelize(
@@ -242,6 +243,7 @@ app.get('/api/test', (req, res) => {
 
 // 🔓 PUBLIC ROUTES (no authentication required)
 app.use('/api/utilisateurs', createUtilisateurRoutes(models)); // login/register handled inside
+app.use('/api', createImageProxyRoutes()); // image proxy endpoint: GET /api/image-proxy?url=...
 
 app.use('/api/terrains', createTerrainRoutes(models)); // public terrain info
 app.use('/api/email', createVerificationEmailRoutes(models)); // email verification
@@ -259,8 +261,8 @@ app.use('/reservation-utilisateur', authenticateToken, reservationUtilisateurRou
 // Static file serving (public)
 app.use('/uploads', express.static('uploads'));
 
-// ✅ 404 HANDLER - FIXED FOR EXPRESS 5.x
-app.use('/*catchall', (req, res) => {
+// ✅ 404 HANDLER - Express 5.x safe catch-all (no wildcard string)
+app.use((req, res) => {
   res.status(404).json({ 
     error: 'Route non trouvée',
     message: `La route ${req.method} ${req.originalUrl} n'existe pas`,
