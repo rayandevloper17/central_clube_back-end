@@ -4,7 +4,22 @@ export default function ReservationController(service) {
       const reservation = await service.create(req.body);
       res.status(201).json(reservation);
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      // Enhanced error response for better frontend display
+      const errorResponse = {
+        error: err.message,
+        type: 'RESERVATION_LIMIT_EXCEEDED',
+        code: 4001,
+        displayType: 'snackbar' // This tells frontend to show as snackbar/popup
+      };
+      
+      // Check if it's a reservation limit error
+      if (err.message.includes('Vous ne pouvez pas créer plus de 3 réservations')) {
+        errorResponse.title = 'Limite de réservations atteinte';
+        errorResponse.severity = 'warning';
+        errorResponse.action = 'VIEW_RESERVATIONS';
+      }
+      
+      res.status(400).json(errorResponse);
     }
   };
 
@@ -39,6 +54,14 @@ const findByCode = async (req, res) => {
 
   const findAll = async (req, res) => {
     try {
+      // Check if user is admin - only admins can see all reservations
+      if (!req.user.si_admin) {
+        return res.status(403).json({ 
+          error: 'Accès non autorisé',
+          message: 'Seuls les administrateurs peuvent accéder à toutes les réservations. Utilisez /history/me pour voir vos propres réservations.'
+        });
+      }
+      
       const list = await service.findAll();
       res.json(list);
     } catch (err) {
@@ -64,6 +87,14 @@ const findByCode = async (req, res) => {
 
       if (!item) return res.status(404).json({ error: "Reservation not found" });
 
+      // Security check: only allow users to see their own reservations, unless they're admin
+      if (!req.user.si_admin && item.id_utilisateur !== req.user.id) {
+        return res.status(403).json({ 
+          error: 'Accès non autorisé',
+          message: 'Vous ne pouvez accéder qu\'à vos propres réservations'
+        });
+      }
+
       res.json(item);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -72,6 +103,20 @@ const findByCode = async (req, res) => {
 
   const update = async (req, res) => {
     try {
+      // First check if the reservation exists and user has permission
+      const existingReservation = await service.findById(req.params.id);
+      if (!existingReservation) {
+        return res.status(404).json({ error: "Reservation not found" });
+      }
+
+      // Security check: only allow users to update their own reservations, unless they're admin
+      if (!req.user.si_admin && existingReservation.id_utilisateur !== req.user.id) {
+        return res.status(403).json({ 
+          error: 'Accès non autorisé',
+          message: 'Vous ne pouvez modifier que vos propres réservations'
+        });
+      }
+
       const updated = await service.update(req.params.id, req.body);
       res.json(updated);
     } catch (err) {
@@ -81,10 +126,42 @@ const findByCode = async (req, res) => {
 
   const remove = async (req, res) => {
     try {
+      // First check if the reservation exists and user has permission
+      const existingReservation = await service.findById(req.params.id);
+      if (!existingReservation) {
+        return res.status(404).json({ error: "Reservation not found" });
+      }
+
+      // Security check: only allow users to delete their own reservations, unless they're admin
+      if (!req.user.si_admin && existingReservation.id_utilisateur !== req.user.id) {
+        return res.status(403).json({ 
+          error: 'Accès non autorisé',
+          message: 'Vous ne pouvez supprimer que vos propres réservations'
+        });
+      }
+
       await service.remove(req.params.id);
       res.json({ message: "Reservation deleted" });
     } catch (err) {
       res.status(400).json({ error: err.message });
+    }
+  };
+
+  const historyForUser = async (req, res) => {
+    try {
+      // Get user ID from authenticated token
+      const userId = req.user.id;
+      
+      console.debug('[ReservationController] historyForUser called for userId=', userId);
+      
+      const reservations = await service.findByUserId(userId);
+      
+      console.debug('[ReservationController] historyForUser found', reservations.length, 'reservations');
+      
+      res.json(reservations);
+    } catch (err) {
+      console.error('[ReservationController] historyForUser error:', err);
+      res.status(500).json({ error: err.message });
     }
   };
 
@@ -95,5 +172,6 @@ const findByCode = async (req, res) => {
     findById,
     update,
     remove,
+    historyForUser,
   };
 }

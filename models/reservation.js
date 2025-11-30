@@ -43,7 +43,7 @@ export default function(sequelize) {
     etat: {
       type: DataTypes.BIGINT,
       allowNull: true,
-      defaultValue: "En attente"
+      defaultValue: 1
     },
     prix_total: {
       type: DataTypes.DOUBLE,

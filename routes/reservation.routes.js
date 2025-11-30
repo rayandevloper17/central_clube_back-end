@@ -1,88 +1,26 @@
 // routes/reservations.js
 import express from 'express';
-<<<<<<< HEAD
-import { authenticateToken as authenticate } from '../middlewares/auth.middleware.js';
+import { authenticateToken } from '../middlewares/auth.middleware.js';
 
 export default function reservationRoutes(reservationController, notificationController) {
   const router = express.Router();
 
   // Existing routes
-  router.post('/', authenticate, reservationController.create);
-  router.get('/', authenticate, reservationController.findAll);
-  router.get('/code/:code', authenticate, reservationController.findByCode);
-  // router.get('/history/me', authenticate, reservationController.historyForUser); // Method not implemented
-  router.get('/:id', authenticate, reservationController.findById);
-  router.put('/:id', authenticate, reservationController.update);
-  router.delete('/:id', authenticate, reservationController.remove);
+  router.post('/', authenticateToken, reservationController.create);
+  router.get('/', authenticateToken, reservationController.findAll);
+  router.get('/code/:code', authenticateToken, reservationController.findByCode);
+  router.get('/history/me', authenticateToken, reservationController.historyForUser); // Get user-specific reservations
+  router.get('/:id', authenticateToken, reservationController.findById);
+  router.put('/:id', authenticateToken, reservationController.update);
+  router.delete('/:id', authenticateToken, reservationController.remove);
 
   // NEW: Score management routes (commented out - methods not implemented yet)
-  // router.put('/:id/score', authenticate, reservationController.updateScore);
-  // router.post('/:id/validate-score', authenticate, reservationController.validateScore);
-  // router.get('/:id/score-status', authenticate, reservationController.getScoreStatus);
-  // router.post('/finalize-pending-scores', authenticate, reservationController.finalizePendingScores);
-=======
-import { authenticateToken } from '../middlewares/auth.middleware.js';
-import security from '../middleware/security.js';
-import { Reservation, Terrain } from '../models';
+  // router.put('/:id/score', authenticateToken, reservationController.updateScore);
+  // router.post('/:id/validate-score', authenticateToken, reservationController.validateScore);
+  // router.get('/:id/score-status', authenticateToken, reservationController.getScoreStatus);
+  // router.post('/finalize-pending-scores', authenticateToken, reservationController.finalizePendingScores);
 
-const router = express.Router();
+  // Remove any endpoint that allows querying by user_id or exposes other users' data
 
-// Public: Get available slots (no user info)
-router.get('/available-slots', async (req, res) => {
-  const { terrain_id, date } = req.query;
-  if (!terrain_id || !date) return res.status(400).json({ error: 'missing_params' });
-  const reservations = await Reservation.findAll({
-    where: { terrain_id, date },
-    attributes: ['heure_debut', 'heure_fin']
-  });
-  res.json({
-    terrain_id,
-    date,
-    occupied_slots: reservations.map(r => ({ heure_debut: r.heure_debut, heure_fin: r.heure_fin })),
-    // available_slots: ... (implement slot calculation if needed)
-  });
-});
-
-// Auth: Get current user's reservations only
-router.get('/my-reservations', authenticateToken, async (req, res) => {
-  const reservations = await Reservation.findAll({
-    where: { user_id: req.user.id },
-    include: [{ model: Terrain }]
-  });
-  res.json(reservations.map(security.sanitizeReservationForOwner));
-});
-
-// Auth: Create reservation (payment required, rate limited)
-router.post('/create', authenticateToken, security.reservationLimiter, security.verifyPayment, async (req, res) => {
-  const { terrain_id, date, heure_debut, heure_fin, payment_id } = req.body;
-  // Check slot availability
-  const conflict = await Reservation.findOne({
-    where: { terrain_id, date, heure_debut, heure_fin }
-  });
-  if (conflict) return res.status(409).json({ error: 'slot_occupied' });
-  // Create reservation
-  const reservation = await Reservation.create({
-    user_id: req.user.id,
-    terrain_id,
-    date,
-    heure_debut,
-    heure_fin,
-    payment_id,
-    status: 'confirmé',
-    confirmation_code: Math.random().toString(36).substring(2, 10)
-  });
-  res.json(security.sanitizeReservationForOwner(reservation));
-});
->>>>>>> 5bb99c24cf0ee4780d4232b27e49318b86340c40
-
-// Auth: Get reservation by ID (only owner)
-router.get('/:id', authenticateToken, async (req, res) => {
-  const reservation = await Reservation.findByPk(req.params.id);
-  if (!reservation) return res.status(404).json({ error: 'not_found' });
-  if (reservation.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
-  res.json(security.sanitizeReservationForOwner(reservation));
-});
-
-// Remove any endpoint that allows querying by user_id or exposes other users' data
-
-export default router;
+  return router;
+}

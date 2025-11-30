@@ -1,39 +1,39 @@
 // routes/admin.js
 import express from 'express';
-import { authenticateToken } from '../middlewares/auth.middleware.js';
-import { isAdmin } from '../middlewares/utilisateur.middleware.js';
-import { Reservation, User, Payment } from '../models';
+import { authenticateToken, requireAdmin } from '../middlewares/auth.middleware.js';
 
-const router = express.Router();
+export default (models) => {
+  const router = express.Router();
 
-router.use(authenticateToken, isAdmin);
+  router.use(authenticateToken, requireAdmin);
 
-// Get all reservations with user details
-router.get('/reservations', async (req, res) => {
-  const reservations = await Reservation.findAll({
-    include: [{ model: User, attributes: ['id', 'email', 'numero_telephone', 'nom', 'prenom'] }]
+  // Get all reservations with user details
+  router.get('/reservations', async (req, res) => {
+    const reservations = await models.reservation.findAll({
+      include: [{ model: models.utilisateur, attributes: ['id', 'email', 'numero_telephone', 'nom', 'prenom'] }]
+    });
+    res.json(reservations);
   });
-  res.json(reservations);
-});
 
-// Get all users
-router.get('/users', async (req, res) => {
-  const users = await User.findAll({ attributes: ['id', 'email', 'numero_telephone', 'nom', 'prenom', 'is_admin'] });
-  res.json(users);
-});
+  // Get all users
+  router.get('/users', async (req, res) => {
+    const users = await models.utilisateur.findAll({ attributes: ['id', 'email', 'numero_telephone', 'nom', 'prenom', 'is_admin'] });
+    res.json(users);
+  });
 
-// Get all payments
-router.get('/payments', async (req, res) => {
-  const payments = await Payment.findAll();
-  res.json(payments);
-});
+  // Get all payments
+  router.get('/payments', async (req, res) => {
+    const payments = await models.credit_transaction.findAll();
+    res.json(payments);
+  });
 
-// Delete any reservation
-router.delete('/reservations/:id', async (req, res) => {
-  const { id } = req.params;
-  const deleted = await Reservation.destroy({ where: { id } });
-  if (deleted) return res.json({ success: true });
-  res.status(404).json({ error: 'not_found' });
-});
+  // Delete any reservation
+  router.delete('/reservations/:id', async (req, res) => {
+    const { id } = req.params;
+    const deleted = await models.reservation.destroy({ where: { id } });
+    if (deleted) return res.json({ success: true });
+    res.status(404).json({ error: 'not_found' });
+  });
 
-export default router;
+  return router;
+};

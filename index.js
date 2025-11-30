@@ -3,7 +3,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import security from './middleware/security.js';
+import * as security from './middleware/security.js';
 import secureLogger from './middleware/secureLogger.js';
 import { Sequelize } from 'sequelize';
 import initModels from './models/init-models.js';
@@ -201,14 +201,7 @@ const corsOptions = {
   optionsSuccessStatus: 204, // explicitly return 204 for successful preflight
 };
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (config.ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true
-}));
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -244,15 +237,10 @@ app.get('/api/test', (req, res) => {
 
 // ✅ REGISTER ROUTES WITH APPROPRIATE MIDDLEWARE
 
-<<<<<<< HEAD
-// 🔓 PUBLIC ROUTES (no authentication required)
-app.use('/api/utilisateurs', createUtilisateurRoutes(models)); // login/register handled inside
-=======
 // Rate limiters
 app.use('/api/utilisateurs/register', security.registerLimiter);
 app.use('/api/utilisateurs/login', security.loginLimiter);
 app.use('/api/reservations/create', authenticateToken, security.reservationLimiter);
->>>>>>> 5bb99c24cf0ee4780d4232b27e49318b86340c40
 
 // PUBLIC ROUTES
 app.use('/api/utilisateurs', createUtilisateurRoutes(models));
@@ -265,16 +253,12 @@ app.use('/api/disponibilites', authenticateToken, createDisponibiliteTerrainRout
 app.use('/api/plage-horaire', authenticateToken, createPlageHoraireRoutes(models));
 app.use('/api/notes', authenticateToken, createNoteUtilisateurRoutes(models));
 app.use('/api/participants', authenticateToken, createParticipantRoutes(models));
-<<<<<<< HEAD
 app.use('/api/reservations', authenticateToken, reservationRoutes(reservationController));
-=======
-app.use('/api/reservations', reservationRoutes(reservationController));
->>>>>>> 5bb99c24cf0ee4780d4232b27e49318b86340c40
 app.use('/api/matches', authenticateToken, matchRoutes(models));
 app.use('/reservation-utilisateur', authenticateToken, reservationUtilisateurRoutes(models));
 
 // ADMIN ROUTES
-app.use('/api/admin', adminRoutes);
+app.use('/api/admin', authenticateToken, adminRoutes(models));
 
 // Static file serving (public)
 app.use('/uploads', express.static('uploads'));

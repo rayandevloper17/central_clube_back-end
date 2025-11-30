@@ -22,4 +22,4 @@ function secureLogger(req, res, next) {
   next();
 }
 
-module.exports = secureLogger;
+export default secureLogger;

@@ -9,6 +9,44 @@ export default function ReservationService(models) {
     const plage = await models.plage_horaire.findByPk(data.id_plage_horaire);
     if (!plage) throw new Error("Plage horaire not found");
 
+    // Check reservation limits for specific date ranges
+    const reservationDate = new Date(data.date);
+    const year = reservationDate.getFullYear();
+    const month = reservationDate.getMonth(); // 0-based (11 = December)
+    const day = reservationDate.getDate();
+
+    // Define the restricted date ranges for December 2025
+    const isInFirstRange = year === 2025 && month === 11 && day >= 1 && day <= 7;
+    const isInSecondRange = year === 2025 && month === 11 && day >= 8 && day <= 15;
+
+    if (isInFirstRange || isInSecondRange) {
+      // Count existing reservations in the relevant range
+      let startDate, endDate, rangeName;
+      
+      if (isInFirstRange) {
+        startDate = new Date(2025, 11, 1); // December 1, 2025
+        endDate = new Date(2025, 11, 7); // December 7, 2025
+        rangeName = "1er au 7 décembre 2025";
+      } else {
+        startDate = new Date(2025, 11, 8); // December 8, 2025
+        endDate = new Date(2025, 11, 15); // December 15, 2025
+        rangeName = "8 au 15 décembre 2025";
+      }
+
+      const existingReservations = await models.reservation.count({
+        where: {
+          id_utilisateur: data.id_utilisateur,
+          date: {
+            [models.Sequelize.Op.between]: [startDate, endDate]
+          }
+        }
+      });
+
+      if (existingReservations >= 3) {
+        throw new Error(`Vous ne pouvez pas créer plus de 3 réservations dans la période du ${rangeName}. Vous avez déjà ${existingReservations} réservations.`);
+      }
+    }
+
     // Normalize prix_total to satisfy DB constraint (check_prix_positif)
     // Prefer client-provided prix_total if valid (> 0); otherwise use plage.price; fallback to 1
     const incomingPrice = Number(data?.prix_total);
