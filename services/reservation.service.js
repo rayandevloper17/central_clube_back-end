@@ -92,60 +92,6 @@ const findOne = async (filter) => {
     return await reservation.destroy();
   };
 
-  // NEW: Find reservations by DATEONLY (YYYY-MM-DD)
-  const findByDate = async (dateStr) => {
-    // Expect dateStr in 'YYYY-MM-DD'
-    return await models.reservation.findAll({
-      where: { date: dateStr },
-      include: [
-        { model: models.terrain, as: 'terrain' },
-        { model: models.utilisateur, as: 'utilisateur' },
-        { model: models.plage_horaire, as: 'plageHoraire' },
-        { model: models.participant, as: 'participants' },
-      ],
-      order: [[ { model: models.plage_horaire, as: 'plageHoraire' }, 'start_time', 'ASC' ]]
-    });
-  };
-
-  // NEW: Find available (not full) reservations by date
-  const findAvailableByDate = async (dateStr) => {
-    const rows = await models.reservation.findAll({
-      where: { date: dateStr },
-      include: [
-        { model: models.terrain, as: 'terrain' },
-        { model: models.utilisateur, as: 'utilisateur' },
-        { model: models.plage_horaire, as: 'plageHoraire' },
-        { model: models.participant, as: 'participants' },
-      ],
-      order: [[ { model: models.plage_horaire, as: 'plageHoraire' }, 'start_time', 'ASC' ]]
-    });
-
-    // Available means open matches (typer==2) with < 4 participants
-    return rows.filter((r) => {
-      const typerVal = Number.parseInt((r.typer ?? 0).toString());
-      const count = Array.isArray(r.participants) ? r.participants.length : 0;
-      return typerVal === 2 && count < 4;
-    });
-  };
-
-  // NEW: Find all available (not full) reservations (any date)
-  const findAvailableAll = async () => {
-    const rows = await models.reservation.findAll({
-      include: [
-        { model: models.terrain, as: 'terrain' },
-        { model: models.utilisateur, as: 'utilisateur' },
-        { model: models.plage_horaire, as: 'plageHoraire' },
-        { model: models.participant, as: 'participants' },
-      ],
-      order: [[ 'date', 'ASC' ], [ { model: models.plage_horaire, as: 'plageHoraire' }, 'start_time', 'ASC' ]]
-    });
-    return rows.filter((r) => {
-      const typerVal = Number.parseInt((r.typer ?? 0).toString());
-      const count = Array.isArray(r.participants) ? r.participants.length : 0;
-      return typerVal === 2 && count < 4;
-    });
-  };
-
   return {
     create,
     findAll,
@@ -154,8 +100,5 @@ const findOne = async (filter) => {
     findByUserId,
     findOne,
     remove,
-    findByDate,
-    findAvailableByDate,
-    findAvailableAll,
   };
 }
