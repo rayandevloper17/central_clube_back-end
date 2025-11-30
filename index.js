@@ -2,12 +2,16 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import security from './middleware/security.js';
+import secureLogger from './middleware/secureLogger.js';
 import { Sequelize } from 'sequelize';
 import initModels from './models/init-models.js';
 
 // Import middlewares
 import { authenticateToken } from './middlewares/auth.middleware.js';
 import { sanitizeInput } from './middlewares/utilisateur.middleware.js';
+import adminRoutes from './routes/admin.js';
 
 // Import route factories
 import createUtilisateurRoutes from './routes/utilisateur.routes.js';
@@ -153,6 +157,10 @@ const reservationController = ReservationController(reservationService);
 
 // Create Express app
 const app = express();
+app.use(helmet());
+app.use(secureLogger); // Only logs for admin/developer
+app.use(security.ipBlocker);
+app.use(security.maintenanceMode);
 
 // ✅ IMPROVED CORS CONFIGURATION (function-based origin to support lists)
 const allowedOrigins = [
@@ -193,20 +201,16 @@ const corsOptions = {
   optionsSuccessStatus: 204, // explicitly return 204 for successful preflight
 };
 
-app.use(cors(corsOptions));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (config.ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// ✅ GLOBAL MIDDLEWARE
-// Request logging middleware (for debugging)
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`, {
-    ip: req.ip,
-    userAgent: req.get('User-Agent')?.substring(0, 100),
-    hasAuth: !!req.headers.authorization
-  });
-  next();
-});
 
 // Global input sanitization
 app.use(sanitizeInput);
@@ -240,21 +244,37 @@ app.get('/api/test', (req, res) => {
 
 // ✅ REGISTER ROUTES WITH APPROPRIATE MIDDLEWARE
 
+<<<<<<< HEAD
 // 🔓 PUBLIC ROUTES (no authentication required)
 app.use('/api/utilisateurs', createUtilisateurRoutes(models)); // login/register handled inside
+=======
+// Rate limiters
+app.use('/api/utilisateurs/register', security.registerLimiter);
+app.use('/api/utilisateurs/login', security.loginLimiter);
+app.use('/api/reservations/create', authenticateToken, security.reservationLimiter);
+>>>>>>> 5bb99c24cf0ee4780d4232b27e49318b86340c40
 
-app.use('/api/terrains', createTerrainRoutes(models)); // public terrain info
-app.use('/api/email', createVerificationEmailRoutes(models)); // email verification
+// PUBLIC ROUTES
+app.use('/api/utilisateurs', createUtilisateurRoutes(models));
+app.use('/api/terrains', createTerrainRoutes(models));
+app.use('/api/email', createVerificationEmailRoutes(models));
 
-// 🔒 PROTECTED ROUTES (authentication required)
+// PROTECTED ROUTES
 app.use('/api/credit-transactions', authenticateToken, createCreditTransactionRoutes(models));
 app.use('/api/disponibilites', authenticateToken, createDisponibiliteTerrainRoutes(models));
 app.use('/api/plage-horaire', authenticateToken, createPlageHoraireRoutes(models));
 app.use('/api/notes', authenticateToken, createNoteUtilisateurRoutes(models));
 app.use('/api/participants', authenticateToken, createParticipantRoutes(models));
+<<<<<<< HEAD
 app.use('/api/reservations', authenticateToken, reservationRoutes(reservationController));
+=======
+app.use('/api/reservations', reservationRoutes(reservationController));
+>>>>>>> 5bb99c24cf0ee4780d4232b27e49318b86340c40
 app.use('/api/matches', authenticateToken, matchRoutes(models));
 app.use('/reservation-utilisateur', authenticateToken, reservationUtilisateurRoutes(models));
+
+// ADMIN ROUTES
+app.use('/api/admin', adminRoutes);
 
 // Static file serving (public)
 app.use('/uploads', express.static('uploads'));
@@ -274,6 +294,7 @@ app.use('/*catchall', (req, res) => {
   });
 });
 
+// Global error handler
 app.use((err, req, res, next) => {
   console.error('❌ Error occurred:', {
     error: err.message,
@@ -283,46 +304,20 @@ app.use((err, req, res, next) => {
     ip: req.ip,
     userAgent: req.get('User-Agent')
   });
-
-  // Handle specific error types
   if (err.name === 'ValidationError') {
-    return res.status(400).json({ 
-      error: 'Erreur de validation',
-      message: err.message,
-      details: err.errors
-    });
+    return res.status(400).json({ error: 'Erreur de validation', message: err.message, details: err.errors });
   }
-
-
   if (err.name === 'SequelizeUniqueConstraintError') {
-    return res.status(409).json({ 
-      error: 'Conflit de données',
-      message: 'Cette ressource existe déjà',
-      field: err.errors?.[0]?.path
-    });
+    return res.status(409).json({ error: 'Conflit de données', message: 'Cette ressource existe déjà', field: err.errors?.[0]?.path });
   }
-
   if (err.name === 'SequelizeForeignKeyConstraintError') {
-    return res.status(400).json({ 
-      error: 'Référence invalide',
-      message: 'Référence vers une ressource inexistante'
-    });
+    return res.status(400).json({ error: 'Référence invalide', message: 'Référence vers une ressource inexistante' });
   }
-
   if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({ 
-      error: 'Token invalide',
-      message: 'Votre session a expiré, veuillez vous reconnecter'
-    });
+    return res.status(401).json({ error: 'Token invalide', message: 'Votre session a expiré, veuillez vous reconnecter' });
   }
-
-  // Default error response
   const statusCode = err.status || err.statusCode || 500;
-  res.status(statusCode).json({ 
-    error: statusCode === 500 ? 'Erreur serveur interne' : err.message,
-    message: statusCode === 500 ? 'Une erreur inattendue s\'est produite' : err.message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
+  res.status(statusCode).json({ error: statusCode === 500 ? 'Erreur serveur interne' : err.message, message: statusCode === 500 ? 'Une erreur inattendue s\'est produite' : err.message, ...(process.env.NODE_ENV === 'development' && { stack: err.stack }) });
 });
 
 // Start server
