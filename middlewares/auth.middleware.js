@@ -126,9 +126,9 @@ export const authorizeUser = (req, res, next) => {
   next();
 };
 
-// Optional: Role-based authorization
+// Optional: Role-based authorization using is_adminfield
 export const requireAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
+  if (!req.user.si_admin) {
     return res.status(403).json({ 
       error: 'Privilèges administrateur requis',
       message: 'Cette action nécessite des privilèges administrateur' 

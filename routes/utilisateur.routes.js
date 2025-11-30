@@ -1,7 +1,7 @@
 // routes/utilisateur.routes.js
 import express from 'express';
 import createUtilisateurController from '../controllers/utilisateur.controller.js';
-import { authenticateToken, authorizeUser } from '../middlewares/auth.middleware.js';
+import { authenticateToken, authorizeUser, requireAdmin } from '../middlewares/auth.middleware.js';
 import { validateCreditUpdate } from '../middlewares/utilisateur.middleware.js';
 
 import { 
@@ -22,8 +22,8 @@ const utilisateurController = createUtilisateurController(models);
   router.post('/logout', utilisateurController.logout);
 
   // 🔒 PROTECTED ROUTES (authentication required)
-  // Get all users (admin only or for selection purposes)
-  router.get('/', authenticateToken, utilisateurController.getAll);
+  // Get all users (admin only)
+  router.get('/', authenticateToken, requireAdmin, utilisateurController.getAll);
   
   // Get user by ID (users can only access their own data)
   router.get('/:id', authenticateToken, validateId, authorizeUser, utilisateurController.getById);

@@ -19,11 +19,10 @@ import createNoteUtilisateurRoutes from './routes/noteUtilisateurRoutes.js';
 import createParticipantRoutes from './routes/participant.routes.js';
 import ReservationService from './services/reservation.service.js';
 import ReservationController from './controllers/reservation.controller.js';
-import ReservationRoutes from './routes/reservation.routes.js';
+import reservationRoutes from './routes/reservation.routes.js';
 import matchRoutes from './routes/matchRoutes.js';
 import reservationUtilisateurRoutes from './routes/reservationUtilisateur.routes.js';
 import createVerificationEmailRoutes from './routes/emailVerification.route.js';
-import createImageProxyRoutes from './routes/imageProxy.routes.js';
 
 // Initialize Sequelize
 const sequelize = new Sequelize(
@@ -243,7 +242,6 @@ app.get('/api/test', (req, res) => {
 
 // 🔓 PUBLIC ROUTES (no authentication required)
 app.use('/api/utilisateurs', createUtilisateurRoutes(models)); // login/register handled inside
-app.use('/api', createImageProxyRoutes()); // image proxy endpoint: GET /api/image-proxy?url=...
 
 app.use('/api/terrains', createTerrainRoutes(models)); // public terrain info
 app.use('/api/email', createVerificationEmailRoutes(models)); // email verification
@@ -254,15 +252,15 @@ app.use('/api/disponibilites', authenticateToken, createDisponibiliteTerrainRout
 app.use('/api/plage-horaire', authenticateToken, createPlageHoraireRoutes(models));
 app.use('/api/notes', authenticateToken, createNoteUtilisateurRoutes(models));
 app.use('/api/participants', authenticateToken, createParticipantRoutes(models));
-app.use('/api/reservations', authenticateToken, ReservationRoutes(reservationController));
+app.use('/api/reservations', authenticateToken, reservationRoutes(reservationController));
 app.use('/api/matches', authenticateToken, matchRoutes(models));
 app.use('/reservation-utilisateur', authenticateToken, reservationUtilisateurRoutes(models));
 
 // Static file serving (public)
 app.use('/uploads', express.static('uploads'));
 
-// ✅ 404 HANDLER - Express 5.x safe catch-all (no wildcard string)
-app.use((req, res) => {
+// ✅ 404 HANDLER - FIXED FOR EXPRESS 5.x
+app.use('/*catchall', (req, res) => {
   res.status(404).json({ 
     error: 'Route non trouvée',
     message: `La route ${req.method} ${req.originalUrl} n'existe pas`,

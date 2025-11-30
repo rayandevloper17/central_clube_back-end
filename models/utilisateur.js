@@ -73,6 +73,11 @@ export default function(sequelize) {
     credit_silver_soccer: {
       type: DataTypes.DOUBLE,
       allowNull: true
+    },
+    is_admin: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
     }
   }, {
     sequelize,

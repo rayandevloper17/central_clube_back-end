@@ -63,9 +63,17 @@ export default (models) => {
         const { email, mot_de_passe } = req.body;
 
         // Find user by email
-        const user = await utilisateur.findOne({ where: { email } });
+        const user = await utilisateur.findOne({ 
+          where: { email },
+          attributes: { include: ['is_admin'] }
+        });
         if (!user) {
           return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
+        }
+
+        // Verify is_admin field is available
+        if (user.is_admin === undefined) {
+          console.warn('Warning: is_admin field is undefined for user', user.id);
         }
 
         // Compare passwords
@@ -76,7 +84,7 @@ export default (models) => {
 
         // Generate JWT tokens
         const accessToken = jwt.sign(
-          { id: user.id, email: user.email },
+          { id: user.id, email: user.email, is_admin: user.is_admin},
           process.env.JWT_SECRET,
           { expiresIn: '15m' } // Short-lived access token
         );
@@ -99,7 +107,8 @@ export default (models) => {
             id: user.id,
             email: user.email,
             nom: user.nom,
-            prenom: user.prenom
+            prenom: user.prenom,
+            is_admin: user.is_admin
           }
         });
       } catch (err) {
@@ -144,7 +153,7 @@ export default (models) => {
 
         // Generate new access token
         const newAccessToken = jwt.sign(
-          { id: user.id, email: user.email },
+          { id: user.id, email: user.email, is_admin: user.is_admin},
           process.env.JWT_SECRET,
           { expiresIn: '15m' }
         );
