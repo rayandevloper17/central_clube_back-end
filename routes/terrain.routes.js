@@ -3,6 +3,7 @@ import createTerrainController from '../controllers/terrain.controller.js';
 import createTerrainService from '../services/terrain.service.js';
 import multer from 'multer';
 import path from 'path';
+import fs from 'fs';
 
 export default (models) => {
   const router = express.Router();
@@ -16,9 +17,14 @@ export default (models) => {
   router.delete('/:id', terrainController.deleteTerrain);
 
   // Configure multer
+  // Use an absolute path for the uploads directory and ensure it exists
+  const uploadsDir = path.resolve(process.cwd(), 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
   const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-      cb(null, 'uploads/'); // تأكد أن هذا المجلد موجود
+      cb(null, uploadsDir);
     },
     filename: (req, file, cb) => {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -39,13 +45,19 @@ export default (models) => {
         return res.status(404).json({ message: 'Terrain not found' });
       }
 
-      const imagePath = `/uploads/${req.file.filename}`;
-      await terrain.update({ image_url: imagePath });
+      // Build full public URL using request protocol and host (no IP hardcoding)
+      const publicBase = `${req.protocol}://${req.get('host')}`;
+      const relativePath = `/uploads/${req.file.filename}`;
+      const fullPublicUrl = `${publicBase}${relativePath}`;
+
+      // Save the full public URL to keep clients simple and compatible
+      await terrain.update({ image_url: fullPublicUrl });
 
       res.status(201).json({
         success: true,
         message: 'Image uploaded and terrain updated successfully',
-        path: imagePath
+        image_url: fullPublicUrl,
+        path: relativePath
       });
     } catch (err) {
       console.error('Upload Error:', err);

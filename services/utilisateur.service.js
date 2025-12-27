@@ -76,7 +76,7 @@ export default (models) => {
       const refreshToken = jwt.sign(
         { id: userId, email, type: 'refresh' },
         JWT_REFRESH_SECRET,
-        { expiresIn: '7d' }
+        { expiresIn: '30d' }
       );
 
       return { accessToken, refreshToken };
@@ -107,7 +107,9 @@ export default (models) => {
       if (!user) {
         throw new Error('Utilisateur non trouvé');
       }
-      return user.update({ refresh_token: refreshToken });
+      const existing = Array.isArray(user.refresh_tokens) ? user.refresh_tokens : [];
+      const updated = [...existing, refreshToken];
+      return user.update({ refresh_tokens: updated });
     },
 
     validateRefreshToken: async (refreshToken) => {
@@ -118,15 +120,15 @@ export default (models) => {
           throw new Error('Type de token invalide');
         }
 
-        // Check if token exists in database
-        const user = await utilisateur.findOne({ 
-          where: { 
-            id: decoded.id, 
-            refresh_token: refreshToken 
-          } 
-        });
+        // Check if token exists in user's refresh_tokens array
+        const user = await utilisateur.findByPk(decoded.id);
 
         if (!user) {
+          throw new Error('Refresh token non trouvé ou expiré');
+        }
+
+        const list = Array.isArray(user.refresh_tokens) ? user.refresh_tokens : [];
+        if (!list.includes(refreshToken)) {
           throw new Error('Refresh token non trouvé ou expiré');
         }
 
@@ -136,18 +138,19 @@ export default (models) => {
       }
     },
 
-    revokeRefreshToken: async (userId) => {
+    revokeRefreshToken: async (userId, refreshToken) => {
       const user = await utilisateur.findByPk(userId);
-      if (user) {
-        return user.update({ refresh_token: null });
-      }
+      if (!user) return;
+      const list = Array.isArray(user.refresh_tokens) ? user.refresh_tokens : [];
+      const filtered = refreshToken ? list.filter(t => t !== refreshToken) : [];
+      return user.update({ refresh_tokens: filtered });
     },
 
     revokeAllUserTokens: async (userId) => {
       // This would revoke all refresh tokens for a user
       // Useful for logout from all devices
       return utilisateur.update(
-        { refresh_token: null },
+        { refresh_tokens: [] },
         { where: { id: userId } }
       );
     },

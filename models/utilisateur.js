@@ -51,6 +51,14 @@ export default function(sequelize) {
       allowNull: true,
       defaultValue: 0
     },
+    // 0 = show rating questionnaire, 1 = hide (completed)
+    displayQ: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 0
+    },
+    // 0 = show rating questionnaire, 1 = hide (completed)
+ 
     image_url: {
       type: DataTypes.TEXT,
       allowNull: true
@@ -73,7 +81,25 @@ export default function(sequelize) {
     credit_silver_soccer: {
       type: DataTypes.DOUBLE,
       allowNull: true
+    },
+    credit_balance: {
+      type: DataTypes.DOUBLE,
+      allowNull: true
+    },
+
+    // JSONB array of refresh tokens for multi-device support
+    refresh_tokens: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      defaultValue: []
+    },
+
+    mainprefere: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null
     }
+  
   }, {
     sequelize,
     tableName: 'utilisateur',

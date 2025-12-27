@@ -4,6 +4,20 @@ import jwt from 'jsonwebtoken';
 export default (models) => {
   const { utilisateur } = models;
 
+  // Ensure refresh_tokens is an array; handle legacy TEXT column storing JSON string
+  function ensureArray(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
+  }
+
   return {
     // Retrieve all users
     getAll: async (req, res, next) => {
@@ -47,7 +61,8 @@ export default (models) => {
           id: user.id,
           email: user.email,
           nom: user.nom,
-          prenom: user.prenom
+          prenom: user.prenom,
+          mainprefere:user.mainprefere
         });
       } catch (err) {
         next(err);
@@ -84,11 +99,13 @@ export default (models) => {
         const refreshToken = jwt.sign(
           { id: user.id, email: user.email, type: 'refresh' },
           process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh',
-          { expiresIn: '7d' } // Long-lived refresh token
+          { expiresIn: '30d' } // Long-lived refresh token (30 days)
         );
 
-        // Store refresh token in database (you might want to add a refresh_token field to user model)
-        await user.update({ refresh_token: refreshToken });
+        // Store refresh token in array (multi-device support)
+        const existing = ensureArray(user.refresh_tokens);
+        const updated = [...existing, refreshToken];
+        await user.update({ refresh_tokens: updated });
 
         res.json({
           accessToken,
@@ -107,7 +124,7 @@ export default (models) => {
       }
     },
 
-    // Refresh token endpoint
+    // Refresh token endpoint (rotate refresh tokens)
     refreshToken: async (req, res, next) => {
       try {
         const { refreshToken } = req.body;
@@ -121,7 +138,7 @@ export default (models) => {
 
         // Verify refresh token
         const decoded = jwt.verify(
-          refreshToken, 
+          refreshToken,
           process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh'
         );
 
@@ -133,9 +150,10 @@ export default (models) => {
           });
         }
 
-        // Find user and verify refresh token matches stored token
+        // Find user and verify refresh token exists in stored array
         const user = await utilisateur.findByPk(decoded.id);
-        if (!user || user.refresh_token !== refreshToken) {
+        const list = ensureArray(user?.refresh_tokens);
+        if (!user || !list.includes(refreshToken)) {
           return res.status(401).json({ 
             message: 'Refresh token invalide ou expiré',
             error: 'INVALID_REFRESH_TOKEN' 
@@ -149,22 +167,29 @@ export default (models) => {
           { expiresIn: '15m' }
         );
 
-        // Optionally generate new refresh token (rotate refresh tokens for better security)
+        // Rotate refresh token
         const newRefreshToken = jwt.sign(
           { id: user.id, email: user.email, type: 'refresh' },
           process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh',
-          { expiresIn: '7d' }
+          { expiresIn: '30d' }
         );
 
-        // Update stored refresh token
-        await user.update({ refresh_token: newRefreshToken });
+        // Replace the old token with the new one
+        const rotated = list.map(t => (t === refreshToken ? newRefreshToken : t));
+        await user.update({ refresh_tokens: rotated });
 
         res.json({
           accessToken: newAccessToken,
           refreshToken: newRefreshToken,
           expiresIn: 900, // 15 minutes in seconds
           tokenType: 'Bearer',
-          message: 'Token rafraîchi avec succès'
+          message: 'Token rafraîchi avec succès',
+          user: {
+            id: user.id,
+            email: user.email,
+            nom: user.nom,
+            prenom: user.prenom
+          }
         });
 
       } catch (err) {
@@ -178,16 +203,28 @@ export default (models) => {
       }
     },
 
-    // Logout endpoint (invalidate refresh token)
+    // Logout endpoint (invalidate specific refresh token)
     logout: async (req, res, next) => {
       try {
         const { refreshToken } = req.body;
         
         if (refreshToken) {
-          // Find user by refresh token and clear it
-          const user = await utilisateur.findOne({ where: { refresh_token: refreshToken } });
+          // Attempt to decode to locate the user
+          let user = null;
+          try {
+            const decoded = jwt.verify(
+              refreshToken,
+              process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh'
+            );
+            user = await utilisateur.findByPk(decoded.id);
+          } catch (_) {
+            // If decode fails, fallback: no-op or additional search strategies could be used
+          }
+
           if (user) {
-            await user.update({ refresh_token: null });
+            const list = ensureArray(user.refresh_tokens);
+            const filtered = list.filter(t => t !== refreshToken);
+            await user.update({ refresh_tokens: filtered });
           }
         }
 
@@ -241,8 +278,13 @@ update: async (req, res, next) => {
           } else {
             return res.status(400).json({ message: 'Sport invalide. Utilisez "padel" ou "soccer"' });
           }
+        } else if (creditType === 'balance' || !creditType) {
+          // Unified balance-based deduction (no sport required)
+          currentCredit = user.credit_balance || 0;
+          creditField = 'credit_balance';
         } else {
-          return res.status(400).json({ message: 'Type de crédit invalide. Utilisez "gold" ou "silver"' });
+          console.error('Erreur de type de crédit:', req.body);
+          // return res.status(400).json({ message: 'Type de crédit invalide. Utilisez "gold", "silver" ou "balance"' });
         }
         
         // Verify user has enough credit
@@ -290,8 +332,12 @@ update: async (req, res, next) => {
           } else {
             return res.status(400).json({ message: 'Sport invalide. Utilisez "padel" ou "soccer"' });
           }
+        } else if (creditType === 'balance' || !creditType) {
+          // Unified balance-based addition (no sport required)
+          currentCredit = user.credit_balance || 0;
+          creditField = 'credit_balance';
         } else {
-          return res.status(400).json({ message: 'Type de crédit invalide. Utilisez "gold" ou "silver"' });
+          return res.status(400).json({ message: 'Type de crédit invalide. Utilisez "gold", "silver" ou "balance"' });
         }
         
         // Add credits

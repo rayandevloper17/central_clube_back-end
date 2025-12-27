@@ -45,6 +45,12 @@ export default function(sequelize) {
       allowNull: true,
       defaultValue: "En attente"
     },
+    // 0 = active, 1 = cancelled
+    isCancel: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 0
+    },
     prix_total: {
       type: DataTypes.DOUBLE,
       allowNull: false
@@ -79,13 +85,59 @@ export default function(sequelize) {
     coder: {
       type: DataTypes.TEXT,
       allowNull: true
-    }
+    },
+    scoormatch: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    // Match score fields
+    teamwin: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    supertiebreak: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    min: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    max: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    // Match score fields - using lowercase to match database schema
+    p1A: { type: DataTypes.TEXT, allowNull: true },
+    p2A: { type: DataTypes.TEXT, allowNull: true },
+    p1A: { type: DataTypes.TEXT, allowNull: true },
+    p2A: { type: DataTypes.TEXT, allowNull: true },
+    Set1A: { type: DataTypes.INTEGER, allowNull: true },
+    Set1B: { type: DataTypes.INTEGER, allowNull: true },
+    Set2A: { type: DataTypes.INTEGER, allowNull: true },
+    Set2B: { type: DataTypes.INTEGER, allowNull: true },
+    Set3A: { type: DataTypes.INTEGER, allowNull: true },
+    Set3B: { type: DataTypes.INTEGER, allowNull: true },
+    score_status: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 0
+    },
+    last_score_update: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    last_score_submitter: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+    },
   }, {
     sequelize,
     tableName: 'reservation',
     schema: 'public',
     hasTrigger: true,
     timestamps: false,
+
     indexes: [
       {
         name: "idx_reservation_date",

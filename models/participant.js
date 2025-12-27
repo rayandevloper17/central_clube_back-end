@@ -46,6 +46,15 @@ export default function(sequelize) {
       allowNull: true,
       defaultValue: 1
     }
+    ,
+    team: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      validate: {
+        min: 0,
+        max: 3
+      }
+    }
   }, {
     sequelize,
     tableName: 'participant',

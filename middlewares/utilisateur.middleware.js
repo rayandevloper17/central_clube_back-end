@@ -5,7 +5,7 @@ const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const validateCreateUser = (req, res, next) => {
   console.log('🔍 Validation - Request body:', req.body);
-  const { nom, prenom, email, mot_de_passe, numero_telephone, telephone } = req.body;
+  const { nom, prenom, email, mot_de_passe, numero_telephone, telephone, mainprefere } = req.body;
   
   // Check required fields
   if (!nom || !email || !mot_de_passe) {
@@ -73,11 +73,27 @@ export const validateCreateUser = (req, res, next) => {
     }
   }
 
+  // Validate hand preference (required: 0 = droite, 1 = gauche)
+  if (mainprefere === undefined || mainprefere === null || mainprefere === '') {
+    return res.status(400).json({
+      error: 'Main préférée manquante',
+      message: 'Veuillez choisir votre main préférée (0: droite, 1: gauche)'
+    });
+  }
+  if (!(mainprefere === 0 || mainprefere === 1 || mainprefere === '0' || mainprefere === '1')) {
+    return res.status(400).json({
+      error: 'Valeur main préférée invalide',
+      message: 'mainprefere doit être 0 (droite) ou 1 (gauche)'
+    });
+  }
+  // Normalize to integer
+  req.body.mainprefere = parseInt(mainprefere, 10);
+
   next();
 };
 
 export const validateUpdateUser = (req, res, next) => {
-  const { nom, prenom, email, mot_de_passe, telephone } = req.body;
+  const { nom, prenom, email, mot_de_passe, telephone, mainprefere } = req.body;
 
   // Validate email format if provided
   if (email && !emailRegex.test(email)) {
@@ -136,6 +152,48 @@ export const validateUpdateUser = (req, res, next) => {
     }
   }
 
+  // Validate rating questionnaire flag if provided (must be 0 or 1)
+  if (req.body.hasOwnProperty('questionnaire_note_rempli')) {
+    const flag = req.body.questionnaire_note_rempli;
+    if (!(flag === 0 || flag === 1 || flag === '0' || flag === '1')) {
+      return res.status(400).json({
+        error: 'Valeur questionnaire invalide',
+        message: 'questionnaire_note_rempli doit être 0 (afficher) ou 1 (masquer)'
+      });
+    }
+    // Normalize to integer
+    req.body.questionnaire_note_rempli = parseInt(flag, 10);
+  }
+
+  // Validate displayQ if provided (must be 0 or 1)
+  if (req.body.hasOwnProperty('displayQ')) {
+    const flag = req.body.displayQ;
+    if (!(flag === 0 || flag === 1 || flag === '0' || flag === '1')) {
+      return res.status(400).json({
+        error: 'Valeur displayQ invalide',
+        message: 'displayQ doit être 0 (afficher) ou 1 (masquer)'
+      });
+    }
+    req.body.displayQ = parseInt(flag, 10);
+  }
+
+  // Validate hand preference if provided (must be 0 or 1)
+  if (req.body.hasOwnProperty('mainprefere')) {
+    if (mainprefere === undefined || mainprefere === null || mainprefere === '') {
+      return res.status(400).json({
+        error: 'Main préférée manquante',
+        message: 'Veuillez choisir votre main préférée (0: droite, 1: gauche)'
+      });
+    }
+    if (!(mainprefere === 0 || mainprefere === 1 || mainprefere === '0' || mainprefere === '1')) {
+      return res.status(400).json({
+        error: 'Valeur main préférée invalide',
+        message: 'mainprefere doit être 0 (droite) ou 1 (gauche)'
+      });
+    }
+    req.body.mainprefere = parseInt(mainprefere, 10);
+  }
+
   next();
 };
 
@@ -191,12 +249,16 @@ export const validateCreditUpdate = (req, res, next) => {
     });
   }
   
-  // Validate creditType
-  if (!creditType || !['gold', 'silver'].includes(creditType)) {
+  // Validate creditType: allow unified balance or default to balance when mi ssing
+  if (creditType && !['credit_balance'].includes(creditType)) {
     return res.status(400).json({ 
       error: 'Type de crédit invalide',
-      message: 'Le type de crédit doit être "gold" ou "silver"' 
+      message: 'Le type de crédit doit être "credit_balance"' 
     });
+  }
+  // Default to unified balance if not provided
+  if (!creditType) {
+    req.body.creditType = 'credit_balance';
   }
   
   next();

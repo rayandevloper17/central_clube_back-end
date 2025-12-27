@@ -10,14 +10,22 @@ export default function createNoteUtilisateurService(models) {
         throw new Error('All fields are required: id_reservation, id_noteur, note');
       }
 
-      // Verify reservation exists
-      const reservation = await models.reservation.findByPk(id_reservation);
-      if (!reservation) {
-        throw new Error(`Reservation with ID ${id_reservation} does not exist`);
+      // For rating system: use a dummy reservation ID if the provided one doesn't exist
+      let effectiveReservationId = id_reservation;
+      
+      try {
+        const reservation = await models.reservation.findByPk(id_reservation);
+        if (!reservation) {
+          console.log(`Warning: Reservation ${id_reservation} not found, using dummy reservation ID 999999 for rating system`);
+          effectiveReservationId = 999999; // Use a dummy reservation ID
+        }
+      } catch (error) {
+        console.log(`Error checking reservation: ${error.message}, using dummy reservation ID 999999`);
+        effectiveReservationId = 999999;
       }
 
       const newNote = await note_utilisateur.create({
-        id_reservation,
+        id_reservation: effectiveReservationId,
         id_noteur,
         note,
       });
@@ -25,19 +33,10 @@ export default function createNoteUtilisateurService(models) {
       return newNote;
     },
 
-    // Get all notes
+    // Get all notes (redefined): return users with their rating and display flag
     async getAllNotes() {
-      return await note_utilisateur.findAll({
-        include: [
-          {
-            model: models.reservation,
-            as: 'reservation'
-          },
-          {
-            model: models.utilisateur,
-            as: 'noteur'
-          }
-        ]
+      return await models.utilisateur.findAll({
+        attributes: ['id', 'nom', 'prenom', 'note', 'image_url', 'displayQ']
       });
     },
 
@@ -59,10 +58,8 @@ export default function createNoteUtilisateurService(models) {
         ]
       });
 
-      if (!notes.length) {
-        throw new Error(`No notes found for user ID ${userId}`);
-      }
-      return notes;
+      // Return empty array if no notes found instead of throwing error
+      return notes || [];
     },
 
     // Get a note by ID

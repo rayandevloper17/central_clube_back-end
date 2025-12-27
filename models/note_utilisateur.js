@@ -25,16 +25,17 @@ export default function (sequelize) {
       defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
     },
     note: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.DOUBLE,
       allowNull: false
     },
     id_reservation: {
       type: DataTypes.BIGINT,
-      allowNull: false,
-      references: {
-        model: 'reservation', // Name of the referenced table
-        key: 'id' // Key in the referenced table
-      }
+      allowNull: true // Made nullable for rating system
+      // Temporarily removed foreign key constraint to support rating system
+      // references: {
+      //   model: 'reservation', // Name of the referenced table
+      //   key: 'id' // Key in the referenced table
+      // }
     }
   }, {
     sequelize,
@@ -46,8 +47,7 @@ export default function (sequelize) {
         name: "note_utilisateur_pkey",
         unique: true,
         fields: [
-          { name: "id" },
-          { name: "id_reservation" }
+          { name: "id" }
         ]
       },
     ]
