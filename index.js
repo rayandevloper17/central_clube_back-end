@@ -4,6 +4,8 @@ import express from 'express';
 import cors from 'cors';
 import { Sequelize } from 'sequelize';
 import initModels from './models/init-models.js';
+import fs from 'fs';
+import path from 'path';
 
 // Import middlewares
 import { authenticateToken } from './middlewares/auth.middleware.js';
@@ -23,7 +25,7 @@ import ReservationRoutes from './routes/reservation.routes.js';
 import matchRoutes from './routes/matchRoutes.js';
 import reservationUtilisateurRoutes from './routes/reservationUtilisateur.routes.js';
 import createVerificationEmailRoutes from './routes/emailVerification.route.js';
-import createImageProxyRoutes from './routes/imageProxy.routes.js';
+import { addNotification, getNotificationsForUser, markNotificationRead } from './utils/notificationBus.js';
 
 // Initialize Sequelize
 const sequelize = new Sequelize(
@@ -67,12 +69,12 @@ if (models.plage_horaire && models.terrain) {
 // Example: If you have reservations related to plage_horaire
 if (models.reservation && models.plage_horaire) {
   models.reservation.belongsTo(models.plage_horaire, {
-    foreignKey: 'id',
-    as: 'plageHoraire'
+    foreignKey: 'id_plage_horaire',
+    as: 'plage_horaire'
   });
   
   models.plage_horaire.hasMany(models.reservation, {
-    foreignKey: 'id',
+    foreignKey: 'id_plage_horaire',
     as: 'reservations'
   });
   
@@ -155,15 +157,23 @@ const reservationController = ReservationController(reservationService);
 // Create Express app
 const app = express();
 
-// ✅ IMPROVED CORS CONFIGURATION (function-based origin to support lists)
+// ✅ IMPROVED CORS CONFIGURATION (env-driven allowed origins)
+// Use comma-separated ALLOWED_ORIGINS for production domains; include FRONTEND_URL for convenience.
+const envAllowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 const allowedOrigins = [
-  'http://localhost:300',
+  ...envAllowedOrigins,
+  process.env.FRONTEND_URL,
+  // Local development defaults
+  'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:8080',
   'http://localhost:4200',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-  process.env.FRONTEND_URL,
 ].filter(Boolean);
 
 const corsOptions = {
@@ -243,7 +253,6 @@ app.get('/api/test', (req, res) => {
 
 // 🔓 PUBLIC ROUTES (no authentication required)
 app.use('/api/utilisateurs', createUtilisateurRoutes(models)); // login/register handled inside
-app.use('/api', createImageProxyRoutes()); // image proxy endpoint: GET /api/image-proxy?url=...
 
 app.use('/api/terrains', createTerrainRoutes(models)); // public terrain info
 app.use('/api/email', createVerificationEmailRoutes(models)); // email verification
@@ -254,15 +263,53 @@ app.use('/api/disponibilites', authenticateToken, createDisponibiliteTerrainRout
 app.use('/api/plage-horaire', authenticateToken, createPlageHoraireRoutes(models));
 app.use('/api/notes', authenticateToken, createNoteUtilisateurRoutes(models));
 app.use('/api/participants', authenticateToken, createParticipantRoutes(models));
-app.use('/api/reservations', authenticateToken, ReservationRoutes(reservationController));
+app.use('/api/reservations', authenticateToken, ReservationRoutes(reservationController, null)); // notificationController is optional
 app.use('/api/matches', authenticateToken, matchRoutes(models));
 app.use('/reservation-utilisateur', authenticateToken, reservationUtilisateurRoutes(models));
 
-// Static file serving (public)
-app.use('/uploads', express.static('uploads'));
+// 🔔 Minimal Notifications API (in-memory)
+app.post('/api/notifications', authenticateToken, (req, res) => {
+  try {
+    const { recipient_id, reservation_id, submitter_id, type, message } = req.body || {};
+    if (!recipient_id) return res.status(400).json({ error: 'recipient_id is required' });
+    const notif = addNotification({ recipient_id, reservation_id, submitter_id, type, message });
+    res.status(201).json(notif);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-// ✅ 404 HANDLER - Express 5.x safe catch-all (no wildcard string)
-app.use((req, res) => {
+app.get('/api/notifications/user/:userId', authenticateToken, (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const notifs = getNotificationsForUser(userId);
+    res.json(notifs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/notifications/:id/read', authenticateToken, (req, res) => {
+  try {
+    const id = req.params.id;
+    const updated = markNotificationRead(id);
+    if (!updated) return res.status(404).json({ error: 'Notification not found' });
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Static file serving (public)
+// Ensure uploads directory exists and serve it statically
+const uploadsDir = path.resolve(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
+
+// ✅ 404 HANDLER - FIXED FOR EXPRESS 5.x
+app.use('/*catchall', (req, res) => {
   res.status(404).json({ 
     error: 'Route non trouvée',
     message: `La route ${req.method} ${req.originalUrl} n'existe pas`,
@@ -328,7 +375,7 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 300;
+const PORT = process.env.PORT || 3001;
 
 (async () => {
   try {
