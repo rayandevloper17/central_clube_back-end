@@ -152,6 +152,15 @@ export default function(sequelize) {
         ]
       },
       {
+        // Enforce uniqueness of private reservations per slot
+        name: "uniq_private_plage_horaire",
+        unique: true,
+        fields: [
+          { name: "id_plage_horaire" },
+          { name: "typer" },
+        ]
+      },
+      {
         name: "reservation_pkey",
         unique: true,
         fields: [

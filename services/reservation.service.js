@@ -1,6 +1,57 @@
 import { addNotification } from '../utils/notificationBus.js';
 
 export default function ReservationService(models) {
+  // Utility: create an audit log entry for credit changes (refunds)
+  const logCreditTransaction = async (userId, amount, type, t) => {
+    try {
+      await models.credit_transaction.create({
+        id_utilisateur: userId,
+        nombre: amount,
+        type,
+        date_creation: new Date(),
+      }, t ? { transaction: t } : undefined);
+    } catch (err) {
+      console.warn('[RefundService] Failed to write credit_transaction:', err?.message);
+    }
+  };
+
+  // Utility: idempotent refund to a user with audit entry and duplicate-prevention
+  const refundUserIdempotent = async (userId, amount, reservationId, participantId, t) => {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      console.log(`[RefundService] Skip refund user ${userId} - invalid amount=${amount}`);
+      return false;
+    }
+
+    const auditKey = `refund:R${reservationId}:U${userId}:P${participantId}`;
+
+    // Basic duplicate prevention: check if this auditKey already exists in credit_transaction.type
+    const existing = await models.credit_transaction.findOne({
+      where: {
+        id_utilisateur: userId,
+        type: auditKey,
+      },
+      transaction: t,
+      lock: t?.LOCK?.UPDATE,
+    });
+    if (existing) {
+      console.log('[RefundService] Duplicate refund prevented for', auditKey);
+      return false;
+    }
+
+    const user = await models.utilisateur.findByPk(userId, { transaction: t, lock: t?.LOCK?.UPDATE });
+    if (!user) {
+      console.log(`[RefundService] User ${userId} not found`);
+      return false;
+    }
+    const currentBalance = Number(user.credit_balance ?? 0);
+    const newBalance = currentBalance + amount;
+    await user.update({ credit_balance: newBalance }, { transaction: t });
+
+    await logCreditTransaction(userId, amount, auditKey, t);
+    console.log(`[RefundService] Refunded user ${userId} amount=${amount} (${currentBalance} -> ${newBalance})`);
+    return true;
+  };
+
   const create = async (data) => {
     // Run reservation creation and balance deduction atomically
     const t = await models.sequelize.transaction();
@@ -133,16 +184,64 @@ export default function ReservationService(models) {
   };
 
   const findByUserId = async (userId) => {
-    return await models.reservation.findAll({
-      where: { id_utilisateur: userId },
-      include: [
-        { model: models.terrain, as: 'terrain' },
-        { model: models.utilisateur, as: 'utilisateur' },
-        { model: models.plage_horaire, as: 'plage_horaire' },
-        { model: models.participant, as: 'participants' }
-      ],
-      order: [[ 'date_creation', 'DESC' ]]
-    });
+    // Return reservations where the user is either the creator (id_utilisateur)
+    // OR is present in participants for that reservation
+    try {
+      // First, get all reservations where user is the creator
+      const createdReservations = await models.reservation.findAll({
+        where: { id_utilisateur: userId },
+        include: [
+          { model: models.terrain, as: 'terrain' },
+          { model: models.utilisateur, as: 'utilisateur' },
+          { model: models.plage_horaire, as: 'plage_horaire' },
+          { model: models.participant, as: 'participants' }
+        ],
+        order: [['date_creation', 'DESC']]
+      });
+
+      // Then, get all participant records for this user
+      const participantRecords = await models.participant.findAll({
+        where: { id_utilisateur: userId },
+        attributes: ['id_reservation']
+      });
+
+      // Get unique reservation IDs where user is a participant
+      const participantReservationIds = [...new Set(
+        participantRecords.map(p => p.id_reservation)
+      )];
+
+      // Filter out IDs that are already in created reservations
+      const createdIds = new Set(createdReservations.map(r => r.id));
+      const additionalIds = participantReservationIds.filter(id => !createdIds.has(id));
+
+      // Fetch additional reservations where user is participant but not creator
+      let additionalReservations = [];
+      if (additionalIds.length > 0) {
+        additionalReservations = await models.reservation.findAll({
+          where: { id: additionalIds },
+          include: [
+            { model: models.terrain, as: 'terrain' },
+            { model: models.utilisateur, as: 'utilisateur' },
+            { model: models.plage_horaire, as: 'plage_horaire' },
+            { model: models.participant, as: 'participants' }
+          ],
+          order: [['date_creation', 'DESC']]
+        });
+      }
+
+      // Combine and sort by date_creation DESC
+      const allReservations = [...createdReservations, ...additionalReservations];
+      allReservations.sort((a, b) => {
+        const dateA = new Date(a.date_creation || 0);
+        const dateB = new Date(b.date_creation || 0);
+        return dateB - dateA;
+      });
+
+      return allReservations;
+    } catch (err) {
+      console.error('[findByUserId] Error:', err?.message, err);
+      throw err;
+    }
   };
 
 
@@ -265,27 +364,69 @@ const findOne = async (filter) => {
       console.log('[CancelService] isCancellerCreator=', isCancellerCreator);
 
       // Helpers
-      // Simplified refund policy: refund the slot price to the canceller's credit_balance
+      // Base price for the slot (total).
       const slotPrice = (() => {
         const p = Number(plage?.price ?? reservation.prix_total ?? 0);
         return Number.isFinite(p) && p > 0 ? p : 0;
       })();
+      
+      console.log('[CancelService] slotPrice=', slotPrice, 'isOpenMatch=', isOpenMatch);
 
       // Refund helper
       const refundUser = async (userId, amount) => {
-        if (!Number.isFinite(amount) || amount <= 0) return;
+        if (!Number.isFinite(amount) || amount <= 0) {
+          console.log(`[CancelService] Skipping refund for user ${userId} - invalid amount: ${amount}`);
+          return;
+        }
         const user = await models.utilisateur.findByPk(userId, { transaction: t, lock: t.LOCK.UPDATE });
-        if (!user) return;
+        if (!user) {
+          console.log(`[CancelService] User ${userId} not found for refund`);
+          return;
+        }
         const currentBalance = Number(user.credit_balance ?? 0);
-        await user.update({ credit_balance: currentBalance + amount }, { transaction: t });
+        const newBalance = currentBalance + amount;
+        await user.update({ credit_balance: newBalance }, { transaction: t });
+        await logCreditTransaction(userId, amount, `refund:cancel:R${id}`, t);
+        console.log(`[CancelService] Refunded user ${userId}: ${amount} credits (${currentBalance} -> ${newBalance})`);
       };
 
-      // CASE A: Creator cancels -> cancel entire reservation, set etat=3, refund all players, free slot
+      // CASE A: Creator cancels -> cancel entire reservation, set etat=3, refund all paid players at FULL price, free slot
       if (isCancellerCreator) {
-        console.log('[CancelService] CASE A: Creator cancels');
-        // Refund the creator (canceller) with the slot price
-        await refundUser(cancellingUserId, slotPrice);
+        console.log('[CancelService] CASE A: Creator cancels - refunding ALL participants who paid by credit');
+        
+        // Refund each participant who has already paid (statepaiement === 1)
+        for (const p of participants) {
+          // ════════════════════════════════════════════════════════════════════
+          // FIXED: Refund based on statepaiement, NOT typepaiement
+          // ════════════════════════════════════════════════════════════════════
+          // - statepaiement = 1 means "already paid" → REFUND
+          // - statepaiement = 0 means "not paid yet" → NO REFUND
+          // 
+          // This applies regardless of typepaiement (Crédit or Sur place)
+          // If someone paid Sur place and statepaiement=1, they get refunded
+          // ════════════════════════════════════════════════════════════════════
+          const hasPaid = Number(p.statepaiement) === 1;
+          
+          if (!hasPaid) {
+            console.log(`[CancelService] Skipping refund for user ${p.id_utilisateur} - not paid (statepaiement=${p.statepaiement}, typepaiement=${p.typepaiement})`);
+            continue;
+          }
+          
+          // Refund amount policy UPDATE: FULL slot price for ALL match types
+          // - Regardless of typer (1: privé, 2: ouvert), refund FULL slot price per paid participant
+          let amount = slotPrice;
+          
+          console.log(`[CancelService] Processing refund for user ${p.id_utilisateur}: amount=${amount}, isCreator=${p.est_createur}, isOpenMatch=${isOpenMatch}, slotPrice=${slotPrice}, typepaiement=${p.typepaiement}, statepaiement=${p.statepaiement}`);
+          
+          if (amount > 0) {
+            await refundUser(p.id_utilisateur, amount);
+          } else {
+            console.log(`[CancelService] Skipping refund for user ${p.id_utilisateur} - amount is 0`);
+          }
+        }
+        
         await reservation.update({ isCancel: 1, etat: 3, date_modif: new Date() }, { transaction: t });
+        
         // Notify all participants except canceller
         for (const p of participants) {
           if (Number(p.id_utilisateur) === Number(cancellingUserId)) continue;
@@ -297,11 +438,16 @@ const findOne = async (filter) => {
             message: 'Le créateur a annulé le match.'
           });
         }
+        
         await models.participant.destroy({ where: { id_reservation: id }, transaction: t });
+        
         if (plage) {
           await plage.update({ disponible: true }, { transaction: t });
         }
+        
         await t.commit();
+        console.log('[CancelService] CASE A completed - all refunds processed');
+        
         return await models.reservation.findByPk(id, {
           include: [
             { model: models.terrain, as: 'terrain' },
@@ -317,12 +463,35 @@ const findOne = async (filter) => {
         throw new Error('Cancelling user is not a participant of this reservation');
       }
 
-      // Non-creator cancels: always refund canceller with slot price, then update reservation
-      console.log('[CancelService] CASE B/C: Non-creator cancels');
-      await refundUser(cancellingUserId, slotPrice);
+      // Non-creator cancels: refund FULL price if they already paid (statepaiement === 1)
+      console.log('[CancelService] CASE B: Non-creator cancels');
+      
+      // ════════════════════════════════════════════════════════════════════════
+      // FIXED: Refund based on statepaiement, NOT typepaiement
+      // ════════════════════════════════════════════════════════════════════════
+      // - statepaiement = 1 means "already paid" → REFUND
+      // - statepaiement = 0 means "not paid yet" → NO REFUND
+      // ════════════════════════════════════════════════════════════════════════
+      const hasPaid = Number(cancellerParticipant.statepaiement) === 1;
+      
+      if (hasPaid) {
+        // Refund policy UPDATE: FULL slot price for ALL match types
+        const refundAmount = slotPrice;
+        
+        console.log(`[CancelService] Refunding non-creator ${cancellingUserId}: amount=${refundAmount}, isOpenMatch=${isOpenMatch}, slotPrice=${slotPrice}, typepaiement=${cancellerParticipant.typepaiement}, statepaiement=${cancellerParticipant.statepaiement}`);
+        
+        if (refundAmount > 0) {
+          await refundUser(cancellingUserId, refundAmount);
+        }
+      } else {
+        console.log(`[CancelService] Non-creator ${cancellingUserId} has not paid yet (statepaiement=${cancellerParticipant.statepaiement}) - no refund needed`);
+      }
+      
       await models.participant.destroy({ where: { id_reservation: id, id_utilisateur: cancellingUserId }, transaction: t });
+      
       // Keep reservation state consistent; if open match, keep it open (etat pending) else mark as modified
       await reservation.update({ date_modif: new Date() }, { transaction: t });
+      
       for (const p of participants) {
         if (Number(p.id_utilisateur) === Number(cancellingUserId)) continue;
         addNotification({
@@ -333,7 +502,10 @@ const findOne = async (filter) => {
           message: 'Un participant a quitté le match.'
         });
       }
+      
       await t.commit();
+      console.log('[CancelService] CASE B completed');
+      
       return await models.reservation.findByPk(id, {
         include: [
           { model: models.terrain, as: 'terrain' },
@@ -342,10 +514,109 @@ const findOne = async (filter) => {
           { model: models.participant, as: 'participants' },
         ]
       });
-      // (Removed fallback block: unified simplified behavior above)
     } catch (err) {
       await t.rollback();
       console.error('[CancelService] Error during cancellation:', err?.message, err);
+      throw err;
+    }
+  };
+
+  // Process refunds based on reservation status and slot conflicts
+  // - Refund all participants of reservations marked invalid (etat == 0)
+  // - When a slot has a winning reservation (etat==1 OR open match with 4), refund participants from other reservations on the same slot
+  // - Cleanup participants and reservation_utilisateur records after refund
+  const processStatusRefunds = async () => {
+    const t = await models.sequelize.transaction();
+    try {
+      console.log('[RefundService] Starting refund processor run');
+
+      // Load all active reservations with includes for slot and participants
+      const reservations = await models.reservation.findAll({
+        where: { isCancel: 0 },
+        include: [
+          { model: models.plage_horaire, as: 'plage_horaire' },
+          { model: models.participant, as: 'participants' },
+        ],
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+
+      // Group by slot id
+      const bySlot = new Map();
+      for (const r of reservations) {
+        const slotId = Number(r.id_plage_horaire);
+        if (!bySlot.has(slotId)) bySlot.set(slotId, []);
+        bySlot.get(slotId).push(r);
+      }
+
+      // Helper to compute slot price
+      const slotPriceOf = (r) => {
+        const p = Number(r?.plage_horaire?.price ?? r?.prix_total ?? 0);
+        return Number.isFinite(p) && p > 0 ? p : 0;
+      };
+
+      // 1) Refund for reservations explicitly invalid (etat == 0) — FULL price
+      for (const r of reservations) {
+        const etatVal = Number(r?.etat ?? -1);
+        if (etatVal === 0 && Array.isArray(r.participants) && r.participants.length > 0) {
+          const slotPrice = slotPriceOf(r);
+          console.log('[RefundService] Invalid reservation detected -> refunding participants (FULL price)', { id: r.id, slotPrice });
+
+          for (const p of r.participants) {
+            const hasPaid = Number(p.statepaiement) === 1;
+            if (!hasPaid) continue;
+            const amount = slotPrice;
+            await refundUserIdempotent(p.id_utilisateur, amount, r.id, p.id, t);
+          }
+
+          // Cleanup: remove participants and user-history links
+          await models.participant.destroy({ where: { id_reservation: r.id }, transaction: t });
+          await models.reservation_utilisateur.destroy({ where: { id_reservation: r.id }, transaction: t });
+        }
+      }
+
+      // 2) For each slot: pick the winning reservation (valid one) and refund others at FULL price
+      for (const [slotId, group] of bySlot.entries()) {
+        // Determine winner: etat == 1 OR open match with exactly 4 participants
+        let winner = null;
+        for (const r of group) {
+          const etatVal = Number(r?.etat ?? -1);
+          const isOpen = Number(r?.typer ?? 0) === 2;
+          const count = Array.isArray(r.participants) ? r.participants.length : 0;
+          if (etatVal === 1 || (isOpen && count === 4)) {
+            winner = r;
+            break;
+          }
+        }
+        if (!winner) continue;
+
+        // Refund all participants from other reservations in the same slot — FULL price
+        for (const r of group) {
+          if (r.id === winner.id) continue;
+
+          const slotPrice = slotPriceOf(r);
+          console.log('[RefundService] Conflict refund (slot winner exists, FULL price)', { slotId, loserReservation: r.id, slotPrice });
+
+          for (const p of r.participants) {
+            const hasPaid = Number(p.statepaiement) === 1;
+            if (!hasPaid) continue;
+            const amount = slotPrice;
+            await refundUserIdempotent(p.id_utilisateur, amount, r.id, p.id, t);
+          }
+
+          // Mark loser as invalid then cleanup participants/history
+          await models.reservation.update({ etat: 0, date_modif: new Date() }, { where: { id: r.id }, transaction: t });
+          await models.participant.destroy({ where: { id_reservation: r.id }, transaction: t });
+          await models.reservation_utilisateur.destroy({ where: { id_reservation: r.id }, transaction: t });
+        }
+      }
+
+      await t.commit();
+      console.log('[RefundService] Refund processor run completed');
+      return { processedSlots: bySlot.size };
+    } catch (err) {
+      await t.rollback();
+      console.error('[RefundService] Refund processor run failed:', err?.message);
       throw err;
     }
   };
@@ -361,5 +632,6 @@ const findOne = async (filter) => {
     findByDate,
     findAvailableByDate,
     cancel,
+    processStatusRefunds,
   };
 }

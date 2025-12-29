@@ -94,8 +94,13 @@ const utilisateurController = createUtilisateurController(models);
           return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
         }
 
-        // Build full public URL using request protocol and host
-        const publicBase = `${req.protocol}://${req.get('host')}`;
+        // Build full public URL using environment or forwarded headers
+        // Prefer PUBLIC_BASE_URL if set; otherwise use X-Forwarded headers or req protocol/host
+        const envBase = process.env.PUBLIC_BASE_URL;
+        const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString();
+        const host = (req.headers['x-forwarded-host'] || req.get('host') || '').toString();
+        const inferredBase = `${proto}://${host}`;
+        const publicBase = (envBase && envBase.trim().length > 0) ? envBase.trim().replace(/\/+$/,'') : inferredBase.replace(/\/+$/,'');
         const relativePath = `/uploads/${req.file.filename}`;
         const fullPublicUrl = `${publicBase}${relativePath}`;
 

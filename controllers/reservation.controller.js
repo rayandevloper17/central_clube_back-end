@@ -4,7 +4,8 @@ export default function ReservationController(service) {
       const data = await service.create(req.body);
       res.status(201).json(data);
     } catch (error) {
-      res.status(400).json({ error: error.message });
+      const isConflict = error?.name === 'ReservationConflictError' || /créneau.*réservé/i.test(error?.message ?? '');
+      res.status(isConflict ? 409 : 400).json({ error: error.message });
     }
   };
 
@@ -52,6 +53,7 @@ export default function ReservationController(service) {
       const data = await service.findByUserId(userId);
       res.json(data);
     } catch (error) {
+      console.error('[findMine] Error:', error?.message, error);
       res.status(500).json({ error: error.message });
     }
   };
@@ -90,16 +92,29 @@ export default function ReservationController(service) {
   const cancel = async (req, res) => {
     try {
       const id = req.params.id;
-      const userId = req.user?.id;
-      console.log(`[Cancel] Incoming request: id=${id}, userId=${userId}`);
-      if (!userId) {
-        return res.status(401).json({ error: 'Unauthorized' });
+      
+      // ════════════════════════════════════════════════════════════════════════
+      // Get userId from request body OR from JWT token
+      // ════════════════════════════════════════════════════════════════════════
+      let userId = req.body?.userId;
+      
+      // Fallback to JWT token if not in body
+      if (!userId && req.user) {
+        userId = req.user.id || req.user.userId;
       }
+      
+      console.log(`[Cancel] Incoming request: id=${id}, userId=${userId}`);  // ← FIXED: Added missing parentheses
+      
+      if (!userId) {
+        return res.status(400).json({ error: 'userId is required to cancel a reservation' });
+      }
+      
       const data = await service.cancel(id, userId);
       res.json({ success: true, reservation: data });
     } catch (error) {
       console.error('[Cancel] Failed:', error?.message, error);
-      res.status(400).json({ error: error.message });
+      const isConflict = error?.name === 'LateCancellationError' || error?.name === 'MatchStatusConflictError';
+      res.status(isConflict ? 409 : 400).json({ error: error.message });
     }
   };
 

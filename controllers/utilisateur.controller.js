@@ -45,15 +45,13 @@ export default (models) => {
       try {
         const { mot_de_passe, email } = req.body;
         
-        // Generate salt and hash password
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(mot_de_passe, salt);
+        // Hash password with standard rounds (salt embedded in hash)
+        const hashedPassword = await bcrypt.hash(mot_de_passe, 10);
         
         // Create user with hashed password
         const user = await utilisateur.create({
           ...req.body,
-          mot_de_passe: hashedPassword,
-          salt: salt // Store salt separately for additional security
+          mot_de_passe: hashedPassword
         });
 
         // Return user data without sensitive information
@@ -105,7 +103,7 @@ export default (models) => {
         // Store refresh token in array (multi-device support)
         const existing = ensureArray(user.refresh_tokens);
         const updated = [...existing, refreshToken];
-        await user.update({ refresh_tokens: updated });
+        await user.update({ refresh_tokens: JSON.stringify(updated) });
 
         res.json({
           accessToken,
@@ -149,7 +147,6 @@ export default (models) => {
             error: 'INVALID_TOKEN_TYPE' 
           });
         }
-
         // Find user and verify refresh token exists in stored array
         const user = await utilisateur.findByPk(decoded.id);
         const list = ensureArray(user?.refresh_tokens);
@@ -176,7 +173,7 @@ export default (models) => {
 
         // Replace the old token with the new one
         const rotated = list.map(t => (t === refreshToken ? newRefreshToken : t));
-        await user.update({ refresh_tokens: rotated });
+        await user.update({ refresh_tokens: JSON.stringify(rotated) });
 
         res.json({
           accessToken: newAccessToken,
@@ -224,7 +221,7 @@ export default (models) => {
           if (user) {
             const list = ensureArray(user.refresh_tokens);
             const filtered = list.filter(t => t !== refreshToken);
-            await user.update({ refresh_tokens: filtered });
+            await user.update({ refresh_tokens: JSON.stringify(filtered) });
           }
         }
 
@@ -245,8 +242,7 @@ update: async (req, res, next) => {
     
     // Handle password hashing if password is being updated
     if (req.body.mot_de_passe) {
-      const salt = await bcrypt.genSalt(10);
-      req.body.mot_de_passe = await bcrypt.hash(req.body.mot_de_passe, salt);
+      req.body.mot_de_passe = await bcrypt.hash(req.body.mot_de_passe, 10);
     }
     
     // Handle credit operations if requested
@@ -359,7 +355,7 @@ update: async (req, res, next) => {
     await user.update(req.body);
     
     // Return updated user (excluding sensitive information)
-    const { mot_de_passe, salt, ...userResponse } = user.toJSON();
+    const { mot_de_passe, ...userResponse } = user.toJSON();
     res.json({
       success: true,
       user: userResponse,

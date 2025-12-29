@@ -107,9 +107,9 @@ export default (models) => {
       if (!user) {
         throw new Error('Utilisateur non trouvé');
       }
-      const existing = Array.isArray(user.refresh_tokens) ? user.refresh_tokens : [];
+      const existing = ensureArray(user.refresh_tokens);
       const updated = [...existing, refreshToken];
-      return user.update({ refresh_tokens: updated });
+      return user.update({ refresh_tokens: JSON.stringify(updated) });
     },
 
     validateRefreshToken: async (refreshToken) => {
@@ -127,7 +127,7 @@ export default (models) => {
           throw new Error('Refresh token non trouvé ou expiré');
         }
 
-        const list = Array.isArray(user.refresh_tokens) ? user.refresh_tokens : [];
+        const list = ensureArray(user.refresh_tokens);
         if (!list.includes(refreshToken)) {
           throw new Error('Refresh token non trouvé ou expiré');
         }
@@ -141,18 +141,31 @@ export default (models) => {
     revokeRefreshToken: async (userId, refreshToken) => {
       const user = await utilisateur.findByPk(userId);
       if (!user) return;
-      const list = Array.isArray(user.refresh_tokens) ? user.refresh_tokens : [];
+      const list = ensureArray(user.refresh_tokens);
       const filtered = refreshToken ? list.filter(t => t !== refreshToken) : [];
-      return user.update({ refresh_tokens: filtered });
+      return user.update({ refresh_tokens: JSON.stringify(filtered) });
     },
 
     revokeAllUserTokens: async (userId) => {
       // This would revoke all refresh tokens for a user
       // Useful for logout from all devices
       return utilisateur.update(
-        { refresh_tokens: [] },
+        { refresh_tokens: JSON.stringify([]) },
         { where: { id: userId } }
       );
     },
   };
 };
+  // Normalize refresh_tokens reads (handles TEXT storing JSON string)
+  function ensureArray(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
+  }

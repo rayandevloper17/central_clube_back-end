@@ -156,6 +156,9 @@ const reservationController = ReservationController(reservationService);
 
 // Create Express app
 const app = express();
+// Respect reverse proxy headers (X-Forwarded-Proto/Host) for correct https detection
+// This is important when the app is behind Nginx or another proxy
+app.set('trust proxy', 1);
 
 // ✅ IMPROVED CORS CONFIGURATION (env-driven allowed origins)
 // Use comma-separated ALLOWED_ORIGINS for production domains; include FRONTEND_URL for convenience.
@@ -168,12 +171,12 @@ const allowedOrigins = [
   ...envAllowedOrigins,
   process.env.FRONTEND_URL,
   // Local development defaults
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:8080',
-  'http://localhost:4200',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
+  'http://24433e926f95.ngrok-free.app:3000',
+  'https://24433e926f95.ngrok-free.app',
+  'http://24433e926f95.ngrok-free.app:8080',
+  'http://24433e926f95.ngrok-free.app:4200',
+  'http://24433e926f95.ngrok-free.app:5173',
+  'http://24433e926f95.ngrok-free.app:5173',
 ].filter(Boolean);
 
 const corsOptions = {
@@ -184,12 +187,12 @@ const corsOptions = {
     // Normalize origin (strip trailing slash)
     const normalized = origin.replace(/\/$/, '');
 
-    // Allow any localhost/127.0.0.1 origin regardless of port (http or https)
+    // Allow any 24433e926f95.ngrok-free.app/24433e926f95.ngrok-free.app origin regardless of port (http or https)
     if (
-      normalized.startsWith('http://localhost') ||
-      normalized.startsWith('https://localhost') ||
-      normalized.startsWith('http://127.0.0.1') ||
-      normalized.startsWith('https://127.0.0.1')
+      normalized.startsWith('http://24433e926f95.ngrok-free.app') ||
+      normalized.startsWith('https://24433e926f95.ngrok-free.app') ||
+      normalized.startsWith('http://24433e926f95.ngrok-free.app') ||
+      normalized.startsWith('https://24433e926f95.ngrok-free.app')
     ) {
       return callback(null, true);
     }
@@ -392,12 +395,23 @@ const PORT = process.env.PORT || 3001;
     } else {
       console.log('⏭️ Database sync skipped (use ENABLE_DB_SYNC=true to enable)');
     }
-    
+     
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
       console.log(`📚 API Documentation: http://0.0.0.0:${PORT}/health`);
       console.log(`🔒 Authentication required for protected routes`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+
+      // Start refund scheduler: checks reservation status changes and slot conflicts
+      const intervalMs = Number(process.env.REFUND_SCHEDULER_INTERVAL_MS || 60_000);
+      setInterval(async () => {
+        try {
+          await reservationService.processStatusRefunds();
+        } catch (err) {
+          console.error('[Scheduler] Refund processing error:', err?.message);
+        }
+      }, intervalMs);
+      console.log(`⏱️ Refund scheduler started (interval=${intervalMs}ms)`);
     });
   } catch (err) {
     console.error('❌ Server startup failed:', err.message);
