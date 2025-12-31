@@ -19,9 +19,10 @@ import createPlageHoraireRoutes from './routes/plageHoraire.routes.js';
 import createTerrainRoutes from './routes/terrain.routes.js';
 import createNoteUtilisateurRoutes from './routes/noteUtilisateurRoutes.js';
 import createParticipantRoutes from './routes/participant.routes.js';
+import createCreditRoutes from './routes/credit.routes.js';
 import ReservationService from './services/reservation.service.js';
 import ReservationController from './controllers/reservation.controller.js';
-import ReservationRoutes from './routes/reservation.routes.js';
+import reservationRoutes from './routes/reservation.routes.js';
 import matchRoutes from './routes/matchRoutes.js';
 import reservationUtilisateurRoutes from './routes/reservationUtilisateur.routes.js';
 import createVerificationEmailRoutes from './routes/emailVerification.route.js';
@@ -37,6 +38,10 @@ const sequelize = new Sequelize(
     port: process.env.DB_PORT,
     dialect: 'postgres',
     logging: false,
+    timezone: '+01:00', // Africa/Algiers timezone (CET/UTC+1)
+    dialectOptions: {
+      useUTC: false, // Don't use UTC for TIME fields
+    },
   }
 );
 
@@ -156,6 +161,9 @@ const reservationController = ReservationController(reservationService);
 
 // Create Express app
 const app = express();
+// Respect reverse proxy headers (X-Forwarded-Proto/Host) for correct https detection
+// This is important when the app is behind Nginx or another proxy
+app.set('trust proxy', 1);
 
 // ✅ IMPROVED CORS CONFIGURATION (env-driven allowed origins)
 // Use comma-separated ALLOWED_ORIGINS for production domains; include FRONTEND_URL for convenience.
@@ -168,12 +176,12 @@ const allowedOrigins = [
   ...envAllowedOrigins,
   process.env.FRONTEND_URL,
   // Local development defaults
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:8080',
-  'http://localhost:4200',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
+  'http://24433e926f95.ngrok-free.app:3000',
+  'https://24433e926f95.ngrok-free.app',
+  'http://24433e926f95.ngrok-free.app:8080',
+  'http://24433e926f95.ngrok-free.app:4200',
+  'http://24433e926f95.ngrok-free.app:5173',
+  'http://24433e926f95.ngrok-free.app:5173',
 ].filter(Boolean);
 
 const corsOptions = {
@@ -184,12 +192,12 @@ const corsOptions = {
     // Normalize origin (strip trailing slash)
     const normalized = origin.replace(/\/$/, '');
 
-    // Allow any localhost/127.0.0.1 origin regardless of port (http or https)
+    // Allow any 24433e926f95.ngrok-free.app/24433e926f95.ngrok-free.app origin regardless of port (http or https)
     if (
-      normalized.startsWith('http://localhost') ||
-      normalized.startsWith('https://localhost') ||
-      normalized.startsWith('http://127.0.0.1') ||
-      normalized.startsWith('https://127.0.0.1')
+      normalized.startsWith('http://24433e926f95.ngrok-free.app') ||
+      normalized.startsWith('https://24433e926f95.ngrok-free.app') ||
+      normalized.startsWith('http://24433e926f95.ngrok-free.app') ||
+      normalized.startsWith('https://24433e926f95.ngrok-free.app')
     ) {
       return callback(null, true);
     }
@@ -252,20 +260,53 @@ app.get('/api/test', (req, res) => {
 // ✅ REGISTER ROUTES WITH APPROPRIATE MIDDLEWARE
 
 // 🔓 PUBLIC ROUTES (no authentication required)
-app.use('/api/utilisateurs', createUtilisateurRoutes(models)); // login/register handled inside
+// IMPORTANT: Public routes must be registered BEFORE any protected routes with overlapping paths
 
+// 🔓 PUBLIC ROUTE for reservation search by code (users should be able to search without login)
+// This must be registered BEFORE the protected reservation-utilisateur routes
+app.get('/api/reservation-utilisateur/code/:code', (req, res) => {
+  Promise.resolve().then(async () => {
+    try {
+      const ReservationUtilisateurService = (await import('./services/reservationUtilisateur.service.js')).default;
+      const ReservationUtilisateurController = (await import('./controllers/reservationUtilisateur.controller.js')).default;
+      
+      const service = ReservationUtilisateurService(models);
+      const controller = ReservationUtilisateurController(service, models);
+      
+      // Call the findByCode method directly
+      await controller.findByCode(req, res);
+    } catch (error) {
+      console.error('Error in public reservation search by code:', error);
+      res.status(500).json({ 
+        error: 'Erreur serveur',
+        message: 'Une erreur est survenue lors de la recherche de la réservation'
+      });
+    }
+  }).catch(error => {
+    console.error('Unhandled error in public reservation search by code:', error);
+    res.status(500).json({ 
+      error: 'Erreur serveur',
+      message: 'Une erreur est survenue lors de la recherche de la réservation'
+    });
+  });
+});
+
+app.use('/api/utilisateurs', createUtilisateurRoutes(models)); // login/register handled inside
 app.use('/api/terrains', createTerrainRoutes(models)); // public terrain info
 app.use('/api/email', createVerificationEmailRoutes(models)); // email verification
 
 // 🔒 PROTECTED ROUTES (authentication required)
+app.use('/api/credits', authenticateToken, createCreditRoutes(models));
 app.use('/api/credit-transactions', authenticateToken, createCreditTransactionRoutes(models));
 app.use('/api/disponibilites', authenticateToken, createDisponibiliteTerrainRoutes(models));
 app.use('/api/plage-horaire', authenticateToken, createPlageHoraireRoutes(models));
 app.use('/api/notes', authenticateToken, createNoteUtilisateurRoutes(models));
 app.use('/api/participants', authenticateToken, createParticipantRoutes(models));
-app.use('/api/reservations', authenticateToken, ReservationRoutes(reservationController, null)); // notificationController is optional
+app.use('/api/reservations', authenticateToken, reservationRoutes(reservationController, null)); // notificationController is optional
 app.use('/api/matches', authenticateToken, matchRoutes(models));
-app.use('/reservation-utilisateur', authenticateToken, reservationUtilisateurRoutes(models));
+
+// 🔒 PROTECTED ROUTES for reservation-utilisateur operations
+app.use('/api/reservation-utilisateur', authenticateToken, reservationUtilisateurRoutes(models));
 
 // 🔔 Minimal Notifications API (in-memory)
 app.post('/api/notifications', authenticateToken, (req, res) => {
@@ -392,12 +433,23 @@ const PORT = process.env.PORT || 3001;
     } else {
       console.log('⏭️ Database sync skipped (use ENABLE_DB_SYNC=true to enable)');
     }
-    
+     
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
       console.log(`📚 API Documentation: http://0.0.0.0:${PORT}/health`);
       console.log(`🔒 Authentication required for protected routes`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+
+      // Start refund scheduler: checks reservation status changes and slot conflicts
+      const intervalMs = Number(process.env.REFUND_SCHEDULER_INTERVAL_MS || 60_000);
+      setInterval(async () => {
+        try {
+          await reservationService.processStatusRefunds();
+        } catch (err) {
+          console.error('[Scheduler] Refund processing error:', err?.message);
+        }
+      }, intervalMs);
+      console.log(`⏱️ Refund scheduler started (interval=${intervalMs}ms)`);
     });
   } catch (err) {
     console.error('❌ Server startup failed:', err.message);

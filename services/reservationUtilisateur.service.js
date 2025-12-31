@@ -31,11 +31,17 @@ export default function ReservationUtilisateurService(models) {
     return await record.destroy();
   };
 
+  // Find reservation_utilisateur by specific criteria
+  const findOne = async (criteria) => {
+    return await models.reservation_utilisateur.findOne({ where: criteria });
+  };
+
   return {
     create,
     findAll,
     findById,
     update,
     remove,
+    findOne,
   };
 }

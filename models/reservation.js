@@ -100,11 +100,11 @@ export default function(sequelize) {
       allowNull: true,
     },
     min: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.DOUBLE,
       allowNull: true
     },
     max: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.DOUBLE,
       allowNull: true
     },
     // Match score fields - using lowercase to match database schema
@@ -149,6 +149,16 @@ export default function(sequelize) {
         name: "idx_reservation_utilisateur",
         fields: [
           { name: "id_utilisateur" },
+        ]
+      },
+      {
+        // Enforce uniqueness of reservations per slot, date and type
+        name: "uniq_plage_horaire_date_typer",
+        unique: true,
+        fields: [
+          { name: "id_plage_horaire" },
+          { name: "date" },
+          { name: "typer" },
         ]
       },
       {

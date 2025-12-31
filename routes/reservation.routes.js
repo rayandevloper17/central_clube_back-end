@@ -13,8 +13,15 @@ export default function reservationRoutes(reservationController, notificationCon
   router.get('/date/:date', authenticateToken, reservationController.findByDate);
   router.get('/available/date/:date', authenticateToken, reservationController.findAvailableByDate);
   // Current user reservations
-  router.get('/me', authenticateToken, reservationController.findMine);
-  router.get('/code/:code', authenticateToken, reservationController.findByCode);
+  router.get('/me', authenticateToken, (req, res) => {
+    // Create a modified request object with userId from the authenticated user
+    const modifiedReq = {
+      ...req,
+      params: { ...req.params, userId: req.user.id }
+    };
+    return reservationController.findByUserId(modifiedReq, res);
+  });
+  // router.get('/code/:code', authenticateToken, reservationController.findByCode); // DISABLED - method not implemented
   // router.get('/history/me', authenticateToken, reservationController.historyForUser); // DISABLED - method not implemented
   router.get('/:id', authenticateToken, reservationController.findById);
   router.put('/:id', authenticateToken, reservationController.update);

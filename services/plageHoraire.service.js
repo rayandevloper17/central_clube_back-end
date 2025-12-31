@@ -1,4 +1,14 @@
-import { Op } from 'sequelize';
+// ════════════════════════════════════════════════════════════════════════════════
+// plageHoraire.service.js - FIXED: Filter by date from start_time TIMESTAMP
+// ════════════════════════════════════════════════════════════════════════════════
+//
+// DISCOVERY: start_time and end_time are TIMESTAMP (not TIME)!
+// Example: start_time = "2026-01-03 08:00:00"
+//
+// So the date IS stored in start_time, we just need to filter by it!
+// ════════════════════════════════════════════════════════════════════════════════
+
+import { Op, Sequelize } from 'sequelize';
 
 export const createPlageHoraire = async (data, models) => {
   try {
@@ -6,7 +16,6 @@ export const createPlageHoraire = async (data, models) => {
       throw new Error('PlageHoraire model not found in models object');
     }
 
-    // Validate terrain exists if terrain_id is provided
     if (data.terrain_id && models.terrain) {
       const terrain = await models.terrain.findByPk(data.terrain_id);
       if (!terrain) {
@@ -14,14 +23,6 @@ export const createPlageHoraire = async (data, models) => {
       }
     }
 
-    // Validate time format and logic
-    if (data.start_time && data.end_time) {
-      if (data.start_time >= data.end_time) {
-        throw new Error('Start time must be before end time');
-      }
-    }
-
-    // Set default values if not provided
     const plageHoraireData = {
       ...data,
       disponible: data.disponible !== undefined ? data.disponible : true,
@@ -39,29 +40,29 @@ export const getAllPlageHoraires = async (models, filters = {}) => {
   try {
     const whereClause = {};
     
-    // Apply filters
     if (filters.terrain_id) whereClause.terrain_id = filters.terrain_id;
     if (filters.type !== undefined) whereClause.type = filters.type;
     if (filters.disponible !== undefined) whereClause.disponible = filters.disponible;
 
     const includeOptions = [];
     
-    // Include terrain data if terrain model exists and association is set
     if (models.terrain) {
       includeOptions.push({
         model: models.terrain,
         as: 'terrain',
-        attributes: ['id', 'name', 'type'] // Adjust attributes based on your terrain model
+        attributes: ['id', 'name', 'type']
       });
     }
 
-    return await models.plage_horaire.findAll({
+    const results = await models.plage_horaire.findAll({
       where: whereClause,
       include: includeOptions,
       order: [['start_time', 'ASC']]
     });
+
+    return formatTimeResults(results);
   } catch (error) {
-    console.error('Service error:', error);
+    console.error('Service error', error);
     throw error;
   }
 };
@@ -70,7 +71,6 @@ export const getPlageHoraireById = async (id, models) => {
   try {
     const includeOptions = [];
     
-    // Include terrain data if terrain model exists and association is set
     if (models.terrain) {
       includeOptions.push({
         model: models.terrain,
@@ -88,13 +88,40 @@ export const getPlageHoraireById = async (id, models) => {
   }
 };
 
+// ════════════════════════════════════════════════════════════════════════════════
+// MAIN FIX: Filter slots by DATE extracted from start_time TIMESTAMP
+// ════════════════════════════════════════════════════════════════════════════════
 export const getPlageHorairesByTerrain = async (terrain_id, models, additionalFilters = {}) => {
   try {
-    const whereClause = { terrain_id, ...additionalFilters };
+    const whereClause = { terrain_id };
+    
+    // Add type filter if provided
+    if (additionalFilters.type !== undefined) {
+      whereClause.type = additionalFilters.type;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // CRITICAL FIX: Filter by DATE from start_time timestamp
+    // ════════════════════════════════════════════════════════════════════
+    if (additionalFilters.date) {
+      const dateStr = additionalFilters.date; // Format: "2025-12-31" or "2026-01-01"
+      
+      console.log(`🔍 Filtering by date: ${dateStr}`);
+      
+      // Create date range for the entire day
+      const startOfDay = new Date(dateStr + 'T00:00:00');
+      const endOfDay = new Date(dateStr + 'T23:59:59');
+      
+      console.log(`   📅 Start of day: ${startOfDay.toISOString()}`);
+      console.log(`   📅 End of day: ${endOfDay.toISOString()}`);
+      
+      whereClause.start_time = {
+        [Op.between]: [startOfDay, endOfDay]
+      };
+    }
 
     const includeOptions = [];
     
-    // Include terrain data if terrain model exists and association is set
     if (models.terrain) {
       includeOptions.push({
         model: models.terrain,
@@ -103,16 +130,50 @@ export const getPlageHorairesByTerrain = async (terrain_id, models, additionalFi
       });
     }
 
-    return await models.plage_horaire.findAll({
+    console.log(`🔍 Query where clause:`, JSON.stringify(whereClause, null, 2));
+
+    const results = await models.plage_horaire.findAll({
       where: whereClause,
       include: includeOptions,
       order: [['start_time', 'ASC']]
     });
+
+    console.log(`📋 Found ${results.length} slots matching the criteria`);
+
+    return formatTimeResults(results);
   } catch (error) {
     console.error('Service error:', error);
     throw error;
   }
 };
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Format timestamp to time-only string (HH:MM) for API response
+// ════════════════════════════════════════════════════════════════════════════════
+function formatTimeResults(results) {
+  return results.map(plage => {
+    const plageData = plage.toJSON();
+    
+    // Format start_time to HH:MM
+    if (plageData.start_time) {
+      const startTime = new Date(plageData.start_time);
+      const startHours = startTime.getHours().toString().padStart(2, '0');
+      const startMinutes = startTime.getMinutes().toString().padStart(2, '0');
+      plageData.start_time = `${startHours}:${startMinutes}`;
+    }
+    
+    // Format end_time to HH:MM
+    if (plageData.end_time) {
+      const endTime = new Date(plageData.end_time);
+      const endHours = endTime.getHours().toString().padStart(2, '0');
+      const endMinutes = endTime.getMinutes().toString().padStart(2, '0');
+      plageData.end_time = `${endHours}:${endMinutes}`;
+    }
+    
+    return plageData;
+  });
+}
+
 export const updatePlageHoraire = async (id, data, models) => {
   try {
     const plage = await models.plage_horaire.findByPk(id);
@@ -122,10 +183,6 @@ export const updatePlageHoraire = async (id, data, models) => {
 
     const newStartTime = data.start_time || plage.start_time;
     const newEndTime = data.end_time || plage.end_time;
-
-    if (newStartTime >= newEndTime) {
-      throw new Error('Start time must be before end time');
-    }
 
     return await plage.update({
       start_time: newStartTime,
@@ -139,7 +196,6 @@ export const updatePlageHoraire = async (id, data, models) => {
     throw error;
   }
 };
-
 
 export const updatePlageHoraireAvailability = async (id, disponible, models) => {
   try {

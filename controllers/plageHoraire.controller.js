@@ -1,8 +1,11 @@
+// ════════════════════════════════════════════════════════════════════════════════
+// plageHoraire.controller.js - FIXED: Pass date to service for filtering
+// ════════════════════════════════════════════════════════════════════════════════
+
 import * as service from '../services/plageHoraire.service.js';
 
 export const createPlageHoraire = async (req, res) => {
   try {
-    // Validate required fields
     const { start_time, end_time, price, terrain_id } = req.body;
     
     if (!start_time || !end_time || !price || !terrain_id) {
@@ -69,22 +72,55 @@ export const getPlageHoraireById = async (req, res) => {
   }
 };
 
+// ════════════════════════════════════════════════════════════════════════════════
+// MAIN ENDPOINT - Filter by terrain AND date
+// ════════════════════════════════════════════════════════════════════════════════
 export const getPlageHorairesByTerrain = async (req, res) => {
   try {
     const { terrain_id } = req.params;
-    const { disponible, type } = req.query;
+    const { disponible, type, date } = req.query;
     
-    const filters = { terrain_id };
-    if (disponible !== undefined) filters.disponible = disponible === 'true';
+    console.log(`\n🔍 ════════════════════════════════════════════════════════════`);
+    console.log(`🔍 getPlageHorairesByTerrain`);
+    console.log(`   📍 terrain_id: ${terrain_id}`);
+    console.log(`   📅 date: ${date || 'NOT PROVIDED'}`);
+    console.log(`   ✓ disponible: ${disponible}`);
+    console.log(`   🏷️ type: ${type}`);
+    console.log(`🔍 ════════════════════════════════════════════════════════════\n`);
+    
+    // ════════════════════════════════════════════════════════════════════
+    // CRITICAL: Pass date to service for filtering by start_time date
+    // ════════════════════════════════════════════════════════════════════
+    const filters = {};
     if (type !== undefined) filters.type = parseInt(type);
-
-    const result = await service.getPlageHorairesByTerrain(terrain_id, req.models, filters);
+    if (date) filters.date = date;  // Pass date to service!
+    
+    // Get slots filtered by terrain AND date
+    let result = await service.getPlageHorairesByTerrain(terrain_id, req.models, filters);
+    
+    console.log(`📋 Service returned ${result.length} slots for terrain ${terrain_id}, date ${date || 'all'}`);
+    
+    // Apply disponible filter if specified
+    if (disponible !== undefined) {
+      const filterValue = disponible === 'true';
+      result = result.filter(slot => slot.disponible === filterValue);
+      console.log(`🔽 After disponible=${filterValue} filter: ${result.length} slots`);
+    }
+    
+    // Log the slots being returned
+    result.forEach(slot => {
+      console.log(`   📍 Slot ${slot.id}: ${slot.start_time}-${slot.end_time} | disponible=${slot.disponible} | price=${slot.price}`);
+    });
+    
+    console.log(`\n✅ Returning ${result.length} slots\n`);
+    
     res.status(200).json({
       success: true,
       count: result.length,
       data: result
     });
   } catch (err) {
+    console.error(`❌ Error:`, err.message);
     res.status(500).json({ 
       success: false,
       message: err.message 
@@ -151,16 +187,21 @@ export const deletePlageHoraire = async (req, res) => {
 export const getAvailableSlots = async (req, res) => {
   try {
     const { terrain_id } = req.params;
-    const { type } = req.query;
+    const { type, date } = req.query;
     
     const filters = { disponible: true };
     if (type !== undefined) filters.type = parseInt(type);
+    if (date) filters.date = date;
 
     const result = await service.getPlageHorairesByTerrain(terrain_id, req.models, filters);
+    
+    // Filter only available slots
+    const availableSlots = result.filter(slot => slot.disponible === true);
+    
     res.status(200).json({
       success: true,
-      count: result.length,
-      data: result
+      count: availableSlots.length,
+      data: availableSlots
     });
   } catch (err) {
     res.status(500).json({ 
