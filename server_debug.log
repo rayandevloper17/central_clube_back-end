@@ -1,0 +1,26 @@
+🔗 Setting up model associations...
+✅ PlageHoraire <-> Terrain association created
+✅ Reservation <-> NoteUtilisateur association created
+✅ NoteUtilisateur <-> Utilisateur (noter) association created
+✅ Reservation <-> PlageHoraire association created
+✅ Database connection successful!
+📋 Available models: [
+  'credit_transaction',
+  'utilisateur',
+  'note_utilisateur',
+  'reservation_utilisateur',
+  'reservation',
+  'participant',
+  'terrain',
+  'disponibilite_terrain',
+  'plage_horaire',
+  'verification_email',
+  'Sequelize',
+  'sequelize'
+]
+⏭️ Database sync skipped (use ENABLE_DB_SYNC=true to enable)
+🚀 Server running on http://0.0.0.0:3001
+📚 API Documentation: http://0.0.0.0:3001/health
+🔒 Authentication required for protected routes
+🌍 Environment: development
+⏱️ Refund scheduler started (interval=60000ms)
