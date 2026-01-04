@@ -151,16 +151,8 @@ export default function(sequelize) {
           { name: "id_utilisateur" },
         ]
       },
-      {
-        // Enforce uniqueness of reservations per slot, date and type
-        name: "uniq_plage_horaire_date_typer",
-        unique: true,
-        fields: [
-          { name: "id_plage_horaire" },
-          { name: "date" },
-          { name: "typer" },
-        ]
-      },
+      // Unique constraint removed to allow multiple open matches (typer=2) to coexist
+      // Logic in service layer handles Private vs Open conflicts
       {
         name: "reservation_pkey",
         unique: true,

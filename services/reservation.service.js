@@ -377,10 +377,11 @@ const create = async (data) => {
         if (existingEtat !== 1) {
           console.log('[ReservationService] Existing open match is invalid (etat ≠ 1), allowing new open match');
           
-          // Cancel the invalid open match
-          await handleOpenMatchOverride(data.id_plage_horaire, data.date, t, models);
+          // DO NOT cancel the existing open match.
+          // Allow multiple open matches to coexist until one becomes valid.
+          // The validation/cancellation of conflicts happens when a match reaches 4 players (etat -> 1).
           
-          console.log('[ReservationService] Proceeding with new open match after clearing invalid one');
+          console.log('[ReservationService] Proceeding with new open match (co-existing with previous one)');
           // Continue to create new open match
         }
       }
