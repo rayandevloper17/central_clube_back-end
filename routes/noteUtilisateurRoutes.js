@@ -67,7 +67,7 @@ export default function createNoteUtilisateurRoutes(models) {
     try {
       const userId = req.params.userId;
       const user = await models.utilisateur.findByPk(userId, {
-        attributes: ['id', 'nom', 'prenom', 'email', 'image_url', 'note', 'displayQ']
+        attributes: ['id', 'nom', 'prenom', 'email', 'image_url', 'note', ]
       });
 
       if (!user) {

@@ -507,7 +507,23 @@ const create = async (data) => {
           type: `debit:reservation:R${reservation.id}:U${data.id_utilisateur}:creator`,
           reason: 'This prevents ParticipantController from double-charging'
         });
+
+        // ✅ NOTIFICATION: Credit Deduction
+        await addNotification({
+          recipient_id: data.id_utilisateur,
+          reservation_id: reservation.id,
+          type: 'credit_deduction',
+          message: `Votre réservation a été confirmée. ${creatorCharge} crédits ont été débités de votre compte.`
+        });
       }
+
+      // ✅ NOTIFICATION: Reservation Confirmation
+      await addNotification({
+        recipient_id: data.id_utilisateur,
+        reservation_id: reservation.id,
+        type: 'reservation_confirmed',
+        message: `Votre réservation pour le ${data.date} a été confirmée avec succès.`
+      });
       
     } catch (insertError) {
       // Handle unique constraint violation
@@ -927,12 +943,12 @@ const cancel = async (id, cancellingUserId) => {
       // Notify other participants
       for (const p of participants) {
         if (Number(p.id_utilisateur) !== Number(cancellingUserId)) {
-          addNotification({
+          await addNotification({
             recipient_id: p.id_utilisateur,
             reservation_id: reservation.id,
             submitter_id: cancellingUserId,
             type: 'reservation_cancelled',
-            message: 'Le créateur a annulé le match.'
+            message: `Le créateur du match a annulé la réservation. ${Number(p.statepaiement) === 1 && slotPrice > 0 ? slotPrice + ' crédits ont été remboursés sur votre compte.' : ''}`
           });
         }
       }

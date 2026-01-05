@@ -339,7 +339,7 @@ const findAll = async (req, res) => {
         include: [{
           model: models.utilisateur,
           as: 'utilisateur',
-          attributes: ['id', 'nom', 'prenom', 'email', 'numero_telephone']
+          attributes: ['id', 'nom', 'prenom', 'email',]
         }]
       });
       res.json(participants);

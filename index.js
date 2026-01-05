@@ -26,7 +26,7 @@ import reservationRoutes from './routes/reservation.routes.js';
 import matchRoutes from './routes/matchRoutes.js';
 import reservationUtilisateurRoutes from './routes/reservationUtilisateur.routes.js';
 import createVerificationEmailRoutes from './routes/emailVerification.route.js';
-import { addNotification, getNotificationsForUser, markNotificationRead } from './utils/notificationBus.js';
+import { addNotification, getNotificationsForUser, markNotificationRead, setNotificationModels } from './utils/notificationBus.js';
 
 // Initialize Sequelize
 const sequelize = new Sequelize(
@@ -47,6 +47,9 @@ const sequelize = new Sequelize(
 
 // Initialize models
 const models = initModels(sequelize);
+
+// Initialize notification system with models
+setNotificationModels(models);
 
 // ✅ ADD ASSOCIATIONS HERE - After models are initialized
 console.log('🔗 Setting up model associations...');
@@ -308,32 +311,32 @@ app.use('/api/matches', authenticateToken, matchRoutes(models));
 // 🔒 PROTECTED ROUTES for reservation-utilisateur operations
 app.use('/api/reservation-utilisateur', authenticateToken, reservationUtilisateurRoutes(models));
 
-// 🔔 Minimal Notifications API (in-memory)
-app.post('/api/notifications', authenticateToken, (req, res) => {
+// 🔔 Minimal Notifications API (persistent)
+app.post('/api/notifications', authenticateToken, async (req, res) => {
   try {
     const { recipient_id, reservation_id, submitter_id, type, message } = req.body || {};
     if (!recipient_id) return res.status(400).json({ error: 'recipient_id is required' });
-    const notif = addNotification({ recipient_id, reservation_id, submitter_id, type, message });
+    const notif = await addNotification({ recipient_id, reservation_id, submitter_id, type, message });
     res.status(201).json(notif);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/notifications/user/:userId', authenticateToken, (req, res) => {
+app.get('/api/notifications/user/:userId', authenticateToken, async (req, res) => {
   try {
     const userId = req.params.userId;
-    const notifs = getNotificationsForUser(userId);
+    const notifs = await getNotificationsForUser(userId);
     res.json(notifs);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/notifications/:id/read', authenticateToken, (req, res) => {
+app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
   try {
     const id = req.params.id;
-    const updated = markNotificationRead(id);
+    const updated = await markNotificationRead(id);
     if (!updated) return res.status(404).json({ error: 'Notification not found' });
     res.json(updated);
   } catch (err) {
