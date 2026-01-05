@@ -428,7 +428,7 @@ const PORT = process.env.PORT || 3001;
     // Skip table sync to avoid permission issues
     // Only sync if explicitly needed and user has permissions
     // FORCED SYNC: To apply schema changes (removing unique constraint for open matches)
-    if (true || (process.env.ENABLE_DB_SYNC === 'true' && process.env.NODE_ENV === 'development')) {
+    if (process.env.ENABLE_DB_SYNC === 'true' && process.env.NODE_ENV === 'development') {
       await sequelize.sync({ alter: true }); // Auto-alter tables to match models
       console.log('✅ Database models synced (alter: true)');
     } else {
