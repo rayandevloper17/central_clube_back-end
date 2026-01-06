@@ -23,7 +23,15 @@ export default (models) => {
     getAll: async (req, res, next) => {
       try {
         const users = await utilisateur.findAll();
-        res.json(users);
+        // Explicitly cast displayQ to Number (int) because BIGINT returns as string
+        const serialized = users.map(u => {
+          const d = u.toJSON();
+          if (d.displayQ !== undefined && d.displayQ !== null) {
+            d.displayQ = Number(d.displayQ);
+          }
+          return d;
+        });
+        res.json(serialized);
       } catch (err) {
         next(err);
       }
@@ -34,7 +42,14 @@ export default (models) => {
       try {
         const user = await utilisateur.findByPk(req.params.id);
         if (!user) return res.status(404).json({ message: 'Utilisateur non trouvé' });
-        res.json(user);
+        
+        // Explicitly cast displayQ to Number (int)
+        const userData = user.toJSON();
+        if (userData.displayQ !== undefined && userData.displayQ !== null) {
+          userData.displayQ = Number(userData.displayQ);
+        }
+        
+        res.json(userData);
       } catch (err) {
         next(err);
       }
