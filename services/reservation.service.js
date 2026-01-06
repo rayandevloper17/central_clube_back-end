@@ -214,6 +214,48 @@ export default function ReservationService(models) {
   };
 
   // ════════════════════════════════════════════════════════════════════════════
+  // UTILITY: Handle private match override (Sur place -> Credit takeover)
+  // ════════════════════════════════════════════════════════════════════════════
+  const handlePrivateMatchOverride = async (reservation, t, models) => {
+    console.log('[PrivateMatchOverride] Starting override process', { reservationId: reservation.id });
+    
+    // 1. Cancel the reservation
+    await reservation.update({ 
+      isCancel: 1,
+      etat: -1, // Mark as cancelled
+      date_modif: new Date()
+    }, { transaction: t });
+
+    // 2. Find and remove participants
+    const participants = await models.participant.findAll({
+      where: { id_reservation: reservation.id },
+      transaction: t
+    });
+
+    if (participants.length > 0) {
+      await models.participant.destroy({
+        where: { id_reservation: reservation.id },
+        transaction: t
+      });
+    }
+
+    // 3. Notify the creator
+    try {
+      await addNotification({
+        recipient_id: reservation.id_utilisateur,
+        reservation_id: reservation.id,
+        type: 'reservation_cancelled',
+        title: 'Réservation annulée',
+        message: `Votre réservation du ${reservation.date} a été annulée car un autre joueur a confirmé le créneau avec un paiement immédiat (Crédits).`
+      });
+    } catch (notificationError) {
+      console.warn('[PrivateMatchOverride] Failed to add notification:', notificationError);
+    }
+    
+    console.log('[PrivateMatchOverride] Completed override');
+  };
+
+  // ════════════════════════════════════════════════════════════════════════════
   // MAIN: Create Reservation with Race Condition Protection
   // ════════════════════════════════════════════════════════════════════════════
   /**
@@ -329,12 +371,33 @@ const create = async (data) => {
       const existingEtat = Number(existingReservation.etat ?? -1);
 
       // ═══════════════════════════════════════════════════════════════════
-      // CASE 1: Private reservation exists - ALWAYS BLOCK
+      // CASE 1: Private reservation exists
       // ═══════════════════════════════════════════════════════════════════
       if (existingTyper === 1) {
-        const error = new Error('Ce créneau horaire a déjà été réservé. Veuillez choisir un autre créneau.');
-        error.statusCode = 409;
-        throw error;
+        // Check if we can override (Sur place -> Credit)
+        const requestedPayType = Number(data?.typepaiementForCreator ?? data?.typepaiement ?? 1);
+        let canOverride = false;
+
+        if (requestedPayType === 1) { // New request is Credit (1)
+           // Check existing payment type
+           const existingCreator = await models.participant.findOne({
+             where: { id_reservation: existingReservation.id, est_createur: true },
+             transaction: t
+           });
+           
+           // If existing is Sur place (2)
+           if (existingCreator && Number(existingCreator.typepaiement) === 2) {
+              console.log('[ReservationService] Overriding "Sur place" private reservation with "Credit" payment');
+              await handlePrivateMatchOverride(existingReservation, t, models);
+              canOverride = true;
+           }
+        }
+
+        if (!canOverride) {
+          const error = new Error('Ce créneau horaire a déjà été réservé. Veuillez choisir un autre créneau.');
+          error.statusCode = 409;
+          throw error;
+        }
       }
 
       // ═══════════════════════════════════════════════════════════════════
