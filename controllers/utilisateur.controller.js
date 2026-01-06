@@ -43,7 +43,7 @@ export default (models) => {
     // Create new user (hash password)
     create: async (req, res, next) => {
       try {
-        const { mot_de_passe, email } = req.body;
+        const { mot_de_passe, email, displayQ } = req.body;
         
         // Hash password with standard rounds (salt embedded in hash)
         const hashedPassword = await bcrypt.hash(mot_de_passe, 10);
@@ -51,7 +51,8 @@ export default (models) => {
         // Create user with hashed password
         const user = await utilisateur.create({
           ...req.body,
-          mot_de_passe: hashedPassword
+          mot_de_passe: hashedPassword,
+          displayQ: displayQ !== undefined ? displayQ : 0 // Ensure displayQ is captured
         });
 
         // Return user data without sensitive information
@@ -60,7 +61,8 @@ export default (models) => {
           email: user.email,
           nom: user.nom,
           prenom: user.prenom,
-          mainprefere:user.mainprefere
+          mainprefere: user.mainprefere,
+          displayQ: user.displayQ
         });
       } catch (err) {
         next(err);
