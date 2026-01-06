@@ -541,11 +541,12 @@ const create = async (data) => {
     // STEP 10: Mark slot as unavailable (only for private matches)
     // ══════════════════════════════════════════════════════════════════════
     // For open matches (typer == 2), keep slot available until confirmed (etat == 1)
-    if (typerVal !== 2) {
+    // For "Sur place" private matches (isOnsitePayment), keep slot available until paid
+    if (typerVal !== 2 && !isOnsitePayment) {
       await plage.update({ disponible: false }, { transaction: t });
       console.log('[ReservationService] Marked slot as unavailable');
     } else {
-      console.log('[ReservationService] Slot kept available for open match (typer == 2)');
+      console.log('[ReservationService] Slot kept available (Open match or Sur place)');
     }
 
     // ══════════════════════════════════════════════════════════════════════
