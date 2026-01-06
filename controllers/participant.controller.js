@@ -390,7 +390,7 @@ const findAll = async (req, res) => {
             'nom',
             'prenom',
             'email',
-            'numero_telephone',
+            // 'numero_telephone',
             'image_url',
             'note',
             'mainprefere'
