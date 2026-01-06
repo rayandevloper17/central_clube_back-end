@@ -33,6 +33,12 @@ export default function(sequelize) {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    // ✅ Add displayQ field
+    displayQ: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 0
+    },
     note: {
       type: DataTypes.DOUBLE,
       allowNull: true,
