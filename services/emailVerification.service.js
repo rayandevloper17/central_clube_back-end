@@ -11,10 +11,17 @@ export default function VerificationEmailService(models, transporter) {
 
     // Send token by email
     await transporter.sendMail({
-      from: '"Rayan App" <rayandevloper@gmail.com>',
+      from: `"${process.env.FROM_NAME}" <${process.env.FROM_EMAIL}>`,
       to: user.email,
-      subject: 'Your Verification Code',
-      text: `Your verification code is: ${token}`,
+      subject: 'Code de vérification',
+      html: `
+        <div style="font-family: Arial, sans-serif; color: #333;">
+          <h2>Vérification de votre compte</h2>
+          <p>Votre code de vérification est :</p>
+          <h1 style="color: #4CAF50;">${token}</h1>
+          <p>Ce code expirera dans 10 minutes.</p>
+        </div>
+      `,
     });
 
     return { message: 'Verification email sent', token }; // token returned for testing only
