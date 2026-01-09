@@ -77,6 +77,10 @@ export default function(sequelize) {
       type: DataTypes.DATE,
       allowNull: true,
       defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+    },
+    positionsurlecourt: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     }
   }, {
     sequelize,
