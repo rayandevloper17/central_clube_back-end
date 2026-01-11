@@ -403,6 +403,9 @@ const create = async (data) => {
       // ═══════════════════════════════════════════════════════════════════
       // CASE 2: Open match exists & user wants private reservation
       // ═══════════════════════════════════════════════════════════════════
+           // ═══════════════════════════════════════════════════════════════════
+      // CASE 2: Open match exists & user wants private reservation
+      // ═══════════════════════════════════════════════════════════════════
       if (existingTyper === 2 && requestedTyper === 1) {
         // Check if open match is VALID (etat = 1 means confirmed/full)
         if (existingEtat === 1) {
@@ -412,9 +415,20 @@ const create = async (data) => {
           throw error;
         }
         
-        // Open match is INVALID (etat ≠ 1) - allow private override
+        // Open match is INVALID (etat ≠ 1)
         if (existingEtat !== 1) {
-          console.log('[ReservationService] Open match is not confirmed (etat ≠ 1), allowing private override');
+          // 🔴 FIX: Check Payment Type. 
+          // Only 'Credit' (1) can override. 'Sur place' (2) cannot.
+          const requestedPayType = Number(data?.typepaiementForCreator ?? data?.typepaiement ?? 1);
+
+          if (requestedPayType === 2) { 
+             console.log('[ReservationService] Cannot override Open Match with "Sur place" private reservation');
+             const error = new Error('Un match ouvert est en cours. Pour prendre le créneau, vous devez payer en ligne (Crédit).');
+             error.statusCode = 409; // Conflict
+             throw error;
+          }
+
+          console.log('[ReservationService] Open match is not confirmed and new reservation is Credit, allowing private override');
           
           // Cancel existing open match and refund participants
           await handleOpenMatchOverride(data.id_plage_horaire, data.date, t, models);
