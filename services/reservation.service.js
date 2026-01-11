@@ -486,7 +486,7 @@ const create = async (data) => {
         throw new Error('Invalid rating range: min must be <= max');
       }
 
-      const sliderMin = 1.0;
+      const sliderMin = 0.0;
       const sliderMax = 7.0;
 
       if (minFloat < sliderMin) throw new Error('La borne minimale doit être ≥ 1.0');
