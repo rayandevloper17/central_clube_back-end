@@ -156,7 +156,7 @@ export default function ReservationService(models) {
   };
 
   // ════════════════════════════════════════════════════════════════════════════
-  // 🔥 FIXED: Check if a slot has available capacity
+  // 🔥 FIXED: Check if a slot has available capacity with PROPER LOCKING
   // ════════════════════════════════════════════════════════════════════════════
   const hasAvailableCapacity = async (plageHoraireId, date, t) => {
     // Get the plage_horaire to check its capacity
@@ -172,19 +172,22 @@ export default function ReservationService(models) {
     // Get capacity (default to 1 if not set)
     const capacity = Number(plage.capacity ?? 1);
 
-    // Count active reservations for this slot on this date
-    const activeReservations = await models.reservation.count({
+    // 🔥 CRITICAL FIX: Lock ALL existing reservations for this slot+date
+    // This prevents race conditions where 2 users see count=0 simultaneously
+    const existingReservations = await models.reservation.findAll({
       where: {
         id_plage_horaire: plageHoraireId,
         date: date,
         isCancel: 0
       },
-      transaction: t
+      transaction: t,
+      lock: t.LOCK.UPDATE  // ← THIS IS THE FIX!
     });
 
+    const activeReservations = existingReservations.length;
     const available = activeReservations < capacity;
     
-    console.log(`[Capacity Check] Slot ${plageHoraireId}: ${activeReservations}/${capacity} - Available: ${available}`);
+    console.log(`[Capacity Check] Slot ${plageHoraireId} on ${date}: ${activeReservations}/${capacity} - Available: ${available}`);
     
     return available;
   };
