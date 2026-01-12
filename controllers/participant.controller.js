@@ -1,7 +1,7 @@
 // controllers/participant.controller.js
 export default function ParticipantController(models) {
   const Participant = models.participant;
-  
+
 
   const create = async (req, res) => {
     const t = await models.sequelize.transaction();
@@ -36,13 +36,20 @@ export default function ParticipantController(models) {
       });
       if (existingParticipant) {
         await t.rollback();
-        return res.status(400).json({ error: "User is already a participant in this match" });
+        return res.status(400).json({
+          error: "Vous avez déjà rejoint ce match",
+          code: "ALREADY_JOINED"
+        });
       }
       // ✅ Check if team slot already taken
       const existingSlot = await Participant.findOne({ where: { id_reservation, team: teamIndex }, transaction: t, lock: t.LOCK.UPDATE });
       if (existingSlot) {
         await t.rollback();
-        return res.status(400).json({ error: `Team position ${teamIndex} is already taken` });
+        return res.status(400).json({
+          error: `Désolé, cette position (${teamIndex + 1}) a été prise par un autre utilisateur. Veuillez choisir une autre position.`,
+          code: "SLOT_TAKEN",
+          takenSlot: teamIndex
+        });
       }
       // ✅ Count participants for this reservation
       const currentParticipantsCount = await Participant.count({
@@ -52,7 +59,8 @@ export default function ParticipantController(models) {
       if (currentParticipantsCount >= 4) {
         await t.rollback();
         return res.status(400).json({
-          error: "Cannot join match. Maximum of 4 players allowed per match panel.",
+          error: "Désolé, ce match est complet. Maximum de 4 joueurs atteint.",
+          code: "MATCH_FULL",
           currentPlayers: currentParticipantsCount,
           maxPlayers: 4
         });
@@ -86,7 +94,7 @@ export default function ParticipantController(models) {
               success: false,
               info: true,
               canJoin: false,
-              message: `Your level ${userNote.toFixed(1)} is outside the required range [${minFloat.toFixed(1)} .. ${maxFloat.toFixed(1)}] for this match.`,
+              message: `Votre niveau ${userNote.toFixed(1)} est en dehors de la plage requise [${minFloat.toFixed(1)} .. ${maxFloat.toFixed(1)}] pour ce match.`,
               code: "LEVEL_OUT_OF_RANGE",
               currentPlayers: currentParticipantsCount,
               maxPlayers: 4,
@@ -107,15 +115,15 @@ export default function ParticipantController(models) {
       // - typepaiement: 1 = Crédit, 2 = Sur place
       // - statepaiement: 0 = not paid, 1 = paid
       // ════════════════════════════════════════════════════════════════════════
-      
+
       // Use nullish coalescing (??) instead of logical OR (||)
       // This only defaults to 1 if the value is null or undefined, NOT if it's 0
       // Joining an open match: default to payment pending validation (0) and credit method (1)
-      const finalStatePaiement = (statepaiement !== undefined && statepaiement !== null) 
-        ? Number(statepaiement) 
+      const finalStatePaiement = (statepaiement !== undefined && statepaiement !== null)
+        ? Number(statepaiement)
         : 0;
-      const finalTypePaiement = (typepaiement !== undefined && typepaiement !== null) 
-        ? Number(typepaiement) 
+      const finalTypePaiement = (typepaiement !== undefined && typepaiement !== null)
+        ? Number(typepaiement)
         : 1;
 
       console.log(`[ParticipantController] Creating participant for reservation ${id_reservation}: user=${id_utilisateur}, team=${teamIndex}, est_createur=${est_createur}`);
@@ -131,7 +139,7 @@ export default function ParticipantController(models) {
       // 3. Payment type is "sur place" (on-site) - typepaiement = 2
       //
       // ════════════════════════════════════════════════════════════════════════════
-      
+
       if (est_createur) {
         // ✅ SKIP: Creator already paid during reservation creation
         console.log(`[ParticipantController] Skipping payment for creator ${id_utilisateur} - already paid during reservation creation`);
@@ -141,9 +149,9 @@ export default function ParticipantController(models) {
         // HOWEVER, we must distinguish between "already paid and active" vs "paid, cancelled, and re-joining".
         // If the user cancelled, they should have received a refund (credit transaction with positive amount).
         // So we need to check the NET balance of transactions for this reservation.
-        
+
         console.log(`[ParticipantController] Checking for existing payment for user ${id_utilisateur} on reservation ${id_reservation}`);
-        
+
         // Find all transactions for this reservation/user
         const transactions = await models.credit_transaction.findAll({
           where: {
@@ -164,13 +172,13 @@ export default function ParticipantController(models) {
         // Calculate net amount paid (sum of negative debits and positive refunds)
         // If net < 0, it means they have paid more than they have been refunded -> Currently Paid
         // If net >= 0, it means they are either net neutral (refunded) or haven't paid -> Needs Payment
-        
+
         const netPaid = transactions.reduce((sum, tx) => sum + Number(tx.nombre), 0);
-        
+
         console.log(`[ParticipantController] Transaction history for user ${id_utilisateur} on res ${id_reservation}:`, {
-           count: transactions.length,
-           netPaid: netPaid,
-           details: transactions.map(t => ({ type: t.type, amount: t.nombre }))
+          count: transactions.length,
+          netPaid: netPaid,
+          details: transactions.map(t => ({ type: t.type, amount: t.nombre }))
         });
 
         // Threshold of -0.01 to account for float precision errors, though usually integer credits
@@ -185,11 +193,11 @@ export default function ParticipantController(models) {
         } else {
           // 💰 CHARGE: Credit payment for non-creator joining the match
           console.log(`[ParticipantController] Processing payment for user ${id_utilisateur}`);
-          
+
           const plage = reservation.id_plage_horaire
             ? await models.plage_horaire.findByPk(reservation.id_plage_horaire, { transaction: t, lock: t.LOCK.UPDATE })
             : null;
-          
+
           const slotPrice = (() => {
             const p = Number(plage?.price ?? reservation?.prix_total ?? 0);
             return Number.isFinite(p) && p > 0 ? p : 0;
@@ -204,28 +212,29 @@ export default function ParticipantController(models) {
               await t.rollback();
               return res.status(404).json({ error: "Utilisateur not found" });
             }
-            
+
             const currentBalance = Number(joiner.credit_balance ?? 0);
-            
+
             console.log(`[ParticipantController] Payment check for user ${id_utilisateur}:`, {
               currentBalance,
               slotPrice,
               hasSufficientBalance: currentBalance >= slotPrice
             });
-            
+
             if (!Number.isFinite(currentBalance) || currentBalance < slotPrice) {
               await t.rollback();
-              return res.status(400).json({ 
-                error: "Insufficient credit balance",
+              return res.status(400).json({
+                error: "Solde de crédit insuffisant",
+                code: "INSUFFICIENT_BALANCE",
                 currentBalance: currentBalance,
                 required: slotPrice
               });
             }
-            
+
             // Deduct balance
             const newBalance = currentBalance - slotPrice;
             await joiner.update({ credit_balance: newBalance }, { transaction: t });
-            
+
             // Generate a unique timestamp-based suffix to allow re-joining
             // Previously, we only used reservation ID, which blocked re-joining after cancellation
             // because the old transaction record still existed.
@@ -239,7 +248,7 @@ export default function ParticipantController(models) {
               type: `debit:join:R${id_reservation}:U${id_utilisateur}:T${teamIndex}:${uniqueTxId}`,
               date_creation: new Date()
             }, { transaction: t });
-            
+
             console.log(`[ParticipantController] 💰 Charged user ${id_utilisateur}:`, {
               amount: slotPrice,
               oldBalance: currentBalance,
@@ -295,7 +304,7 @@ export default function ParticipantController(models) {
 
       const responseData = {
         success: true,
-        message: "Successfully joined the match",
+        message: "Vous avez rejoint le match avec succès",
         participant: result,
         currentPlayers: updatedCount,
         maxPlayers: 4,
@@ -308,32 +317,53 @@ export default function ParticipantController(models) {
     } catch (error) {
       console.error("[ParticipantController] Error creating participant:", error);
       console.error("[ParticipantController] Error stack:", error.stack);
-      try { await t.rollback(); } catch {}
-      
+      try { await t.rollback(); } catch { }
+
+      // ════════════════════════════════════════════════════════════════════════
+      // RACE CONDITION ERROR HANDLING
+      // ════════════════════════════════════════════════════════════════════════
+
+      // Check if this is a unique constraint violation (slot was taken between our check and insert)
+      if (error.name === 'SequelizeUniqueConstraintError' ||
+        error.original?.code === '23505' || // PostgreSQL unique violation
+        error.message?.includes('unique') ||
+        error.message?.includes('duplicate') ||
+        error.message?.includes('uniq_participant_reservation_team')) {
+
+        console.log(`[ParticipantController] ⚠️ RACE CONDITION DETECTED: Unique constraint violation - slot was taken by another user`);
+
+        return res.status(400).json({
+          error: "Désolé, ce créneau a été pris par un autre utilisateur. Veuillez choisir un autre horaire.",
+          code: "SLOT_TAKEN_RACE_CONDITION",
+          message: "Désolé, ce créneau a été pris par un autre utilisateur. Veuillez choisir un autre horaire.",
+          success: false
+        });
+      }
+
       // Provide more detailed error response
       const errorResponse = {
-        error: error.message || "Unknown error occurred",
+        error: error.message || "Une erreur s'est produite",
         code: error.code || "UNKNOWN_ERROR",
         timestamp: new Date().toISOString()
       };
-      
+
       // Add specific error details for common issues
       if (error.message && error.message.includes("Insufficient credit balance")) {
         errorResponse.code = "INSUFFICIENT_BALANCE";
-        errorResponse.details = "User does not have enough credits to join this match";
+        errorResponse.error = "Solde de crédit insuffisant";
       } else if (error.message && error.message.includes("already a participant")) {
         errorResponse.code = "ALREADY_PARTICIPANT";
-        errorResponse.details = "User is already a participant in this match";
+        errorResponse.error = "Vous avez déjà rejoint ce match";
       } else if (error.message && error.message.includes("position")) {
         errorResponse.code = "POSITION_TAKEN";
-        errorResponse.details = "The selected position is already taken";
+        errorResponse.error = "Cette position est déjà prise";
       }
-      
+
       res.status(400).json(errorResponse);
     }
   };
 
-const findAll = async (req, res) => {
+  const findAll = async (req, res) => {
     try {
       const participants = await Participant.findAll({
         include: [{

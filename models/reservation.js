@@ -103,6 +103,7 @@ export default function(sequelize) {
       type: DataTypes.DOUBLE,
       allowNull: true
     },
+
     max: {
       type: DataTypes.DOUBLE,
       allowNull: true
@@ -119,6 +120,11 @@ export default function(sequelize) {
     Set3A: { type: DataTypes.INTEGER, allowNull: true },
     Set3B: { type: DataTypes.INTEGER, allowNull: true },
     score_status: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 0
+    },
+    ispayed: {
       type: DataTypes.INTEGER,
       allowNull: true,
       defaultValue: 0

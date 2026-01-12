@@ -1,6 +1,6 @@
 import { Sequelize, DataTypes } from 'sequelize';
 
-export default function(sequelize) {
+export default function (sequelize) {
   return sequelize.define('participant', {
     id: {
       autoIncrement: true,
@@ -17,7 +17,7 @@ export default function(sequelize) {
         key: 'id'
       }
     },
-    
+
     rejoins: {
       type: DataTypes.DATE,
       allowNull: true,
@@ -27,7 +27,7 @@ export default function(sequelize) {
       type: DataTypes.BOOLEAN,
       allowNull: true,
       defaultValue: false
-    }, 
+    },
     id_reservation: {
       type: DataTypes.BIGINT,
       allowNull: false,
@@ -74,6 +74,19 @@ export default function(sequelize) {
           { name: "id" },
         ]
       },
+      {
+        name: "uniq_participant_reservation_team",
+        unique: true,
+        fields: [
+          { name: "id_reservation" },
+          { name: "team" }
+        ],
+        where: {
+          team: {
+            [Sequelize.Op.ne]: null
+          }
+        }
+      }
     ]
   });
 };
