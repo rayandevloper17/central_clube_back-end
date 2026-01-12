@@ -298,6 +298,90 @@ export default function ParticipantController(models) {
       if (typerVal === 2 && updatedCount === 4) {
         console.log(`[ParticipantController] Open match full - marking reservation ${id_reservation} as valid`);
         await reservation.update({ etat: 1, date_modif: new Date() }, { transaction: t });
+
+        // ════════════════════════════════════════════════════════════════════════
+        // 🔥 CANCEL ALL OTHER PENDING OPEN MATCHES FOR THIS SLOT
+        // ════════════════════════════════════════════════════════════════════════
+        console.log(`[ParticipantController] Checking for conflicting open matches...`);
+
+        // Find all OTHER open matches for the same slot+date that are still pending (etat != 1)
+        const conflictingMatches = await models.reservation.findAll({
+          where: {
+            id_plage_horaire: reservation.id_plage_horaire,
+            date: reservation.date,
+            typer: 2, // Open matches only
+            isCancel: 0,
+            etat: { [models.Sequelize.Op.ne]: 1 }, // Not valid yet
+            id: { [models.Sequelize.Op.ne]: id_reservation } // Not THIS reservation
+          },
+          transaction: t,
+          lock: t.LOCK.UPDATE
+        });
+
+        console.log(`[ParticipantController] Found ${conflictingMatches.length} conflicting pending matches to cancel`);
+
+        for (const conflictMatch of conflictingMatches) {
+          console.log(`[ParticipantController] Cancelling conflicting match ${conflictMatch.id}`);
+
+          // Cancel the reservation
+          await conflictMatch.update({
+            isCancel: 1,
+            etat: -1,
+            date_modif: new Date()
+          }, { transaction: t });
+
+          // Find all participants in this conflicting match
+          const conflictParticipants = await models.participant.findAll({
+            where: { id_reservation: conflictMatch.id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+          });
+
+          // Refund all participants
+          for (const participant of conflictParticipants) {
+            if (Number(participant.statepaiement) === 1) { // Only refund if paid
+              const user = await models.utilisateur.findByPk(participant.id_utilisateur, {
+                transaction: t,
+                lock: t.LOCK.UPDATE
+              });
+
+              if (user) {
+                const refundAmount = Number(reservation.prix_total ?? 0);
+                const currentBalance = Number(user.credit_balance ?? 0);
+                await user.update({
+                  credit_balance: currentBalance + refundAmount
+                }, { transaction: t });
+
+                // Log the refund
+                await models.credit_transaction.create({
+                  id_utilisateur: participant.id_utilisateur,
+                  nombre: refundAmount,
+                  type: `refund:match_override:R${conflictMatch.id}`,
+                  date_creation: new Date()
+                }, { transaction: t });
+
+                console.log(`[ParticipantController] Refunded ${refundAmount} to user ${participant.id_utilisateur}`);
+              }
+            }
+          }
+
+          // Delete the conflicting participants
+          await models.participant.destroy({
+            where: { id_reservation: conflictMatch.id },
+            transaction: t
+          });
+        }
+
+        // Now mark the slot as unavailable since this match is full and valid
+        const plageHoraire = await models.plage_horaire.findByPk(reservation.id_plage_horaire, {
+          transaction: t,
+          lock: t.LOCK.UPDATE
+        });
+
+        if (plageHoraire) {
+          await plageHoraire.update({ disponible: false }, { transaction: t });
+          console.log(`[ParticipantController] Marked slot ${reservation.id_plage_horaire} as unavailable`);
+        }
       }
 
       await t.commit();
