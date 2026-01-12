@@ -37,6 +37,10 @@ export default function(sequelize) {
         model: 'terrain',
         key: 'id'
       }
+    },
+    capacity: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     }
   }, {
     sequelize,
