@@ -40,7 +40,8 @@ export default function(sequelize) {
     },
     capacity: {
       type: DataTypes.INTEGER,
-      allowNull: true
+      allowNull: false,
+      defaultValue: 1
     }
   }, {
     sequelize,
