@@ -75,20 +75,21 @@ export default function ReservationService(models) {
   };
 
   // ════════════════════════════════════════════════════════════════════════════
-  // UTILITY: Handle pending match override (Clears ANY pending match for Credit takeover)
+  // UTILITY: Cancel pending OPEN matches when a PRIVATE match is created
   // ════════════════════════════════════════════════════════════════════════════
   const handleOpenMatchOverride = async (plageHoraireId, date, t, models) => {
-    console.log('[Override] Starting override process for all pending matches', { plageHoraireId, date });
+    console.log('[Override] PRIVATE match created -> Cancelling pending OPEN matches', { plageHoraireId, date });
 
     try {
-      // Find all active reservations (Private OR Open) that are NOT confirmed (etat != 1)
+      // 🔥 CRITICAL: Only cancel PENDING OPEN matches (typer=2, etat=0)
+      // Do NOT cancel other private matches
       const openMatchReservations = await models.reservation.findAll({
         where: {
           id_plage_horaire: plageHoraireId,
           date: date,
-          typer: { [Op.or]: [1, 2] }, // Target BOTH Private (1) and Open (2)
+          typer: 2, // Only OPEN matches
           isCancel: 0,
-          etat: { [Op.ne]: 1 } // etat ≠ 1 (invalid/pending reservations)
+          etat: 0 // Only PENDING (not valid yet)
         },
         transaction: t,
         lock: t.LOCK.UPDATE
@@ -258,6 +259,7 @@ export default function ReservationService(models) {
       if (!plage) {
         throw new Error("Plage horaire not found");
       }
+      // 2c4a826..b4472c5  main -> main
 
       console.log('[ReservationService] Acquired lock on plage_horaire', {
         id: plage.id,
