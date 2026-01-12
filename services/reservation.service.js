@@ -217,8 +217,8 @@ export default function ReservationService(models) {
   const create = async (data) => {
     const t = await models.sequelize.transaction({
       isolationLevel: models.Sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
-    }); 
-    
+    });
+
 
     try {
       console.log('[ReservationService] Starting reservation creation', {
@@ -384,14 +384,19 @@ export default function ReservationService(models) {
         const requestedPayType = Number(data?.typepaiementForCreator ?? data?.typepaiement ?? 1);
         const isSurPlace = requestedPayType === 2; // 2 = Sur place (Pending)
 
-        if (!isSurPlace) {
-          // Credit payment can override pending reservations
+        // 🔥 CRITICAL FIX: Only override for PRIVATE matches (typer=1)
+        // Open matches (typer=2) should NOT cancel other pending matches during creation
+        // They compete and winner is determined when one reaches 4 players
+        if (!isSurPlace && typerVal === 1) {
+          // PRIVATE match with credit payment can override pending reservations
           const pendingReservations = existingReservations.filter(r => Number(r.etat) !== 1);
 
           if (pendingReservations.length > 0) {
-            console.log('[ReservationService] "Credit" request -> Overriding pending reservations.');
+            console.log('[ReservationService] PRIVATE "Credit" match -> Overriding pending reservations.');
             await handleOpenMatchOverride(data.id_plage_horaire, data.date, t, models);
           }
+        } else if (typerVal === 2) {
+          console.log('[ReservationService] OPEN match -> Allowing to compete with other pending matches.');
         }
       }
 
