@@ -468,10 +468,15 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 10: Update slot availability (only mark unavailable if at capacity)
+      // STEP 10: Update slot availability
       // ══════════════════════════════════════════════════════════════════════
-      if (typerVal !== 2 && !isOnsitePayment) {
-        // Check if this slot is now at full capacity
+      // For PRIVATE matches with CREDIT payment: Mark slot as unavailable immediately
+      if (typerVal === 1 && !isOnsitePayment) {
+        // Private match + Credit payment → Slot is now taken
+        await plage.update({ disponible: false }, { transaction: t });
+        console.log(`[ReservationService] 🔒 Slot ${plage.id} marked as unavailable (private + credit)`);
+      } else if (typerVal !== 2 && !isOnsitePayment) {
+        // For other cases: Check if this slot is now at full capacity
         const nowAtCapacity = !(await hasAvailableCapacity(plage.id, data.date, t));
         
         if (nowAtCapacity) {
