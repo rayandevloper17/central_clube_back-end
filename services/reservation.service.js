@@ -217,7 +217,8 @@ export default function ReservationService(models) {
   const create = async (data) => {
     const t = await models.sequelize.transaction({
       isolationLevel: models.Sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
-    });
+    }); 
+    
 
     try {
       console.log('[ReservationService] Starting reservation creation', {
