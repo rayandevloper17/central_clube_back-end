@@ -395,10 +395,29 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 8: Handle payment and balance deduction
       // ══════════════════════════════════════════════════════════════════════
-      const creatorPayType = Number(data?.typepaiementForCreator ?? data?.typepaiement ?? 1);
+      
+      // 🔥 FIX: More robust payment type detection
+      const creatorPayType = (() => {
+        if (data.typepaiementForCreator !== undefined && data.typepaiementForCreator !== null) {
+          return Number(data.typepaiementForCreator);
+        }
+        if (data.typepaiement !== undefined && data.typepaiement !== null) {
+          return Number(data.typepaiement);
+        }
+        return 1; // Default to credit
+      })();
+      
       const etatVal = Number(data?.etat ?? -1);
       const isOnsitePayment = (creatorPayType === 2) || (etatVal === 0);
       const shouldSkipDeduction = (typerVal === 1) && isOnsitePayment;
+      
+      console.log(`[ReservationService] 💳 Payment detection:`, {
+        typepaiementForCreator: data.typepaiementForCreator,
+        typepaiement: data.typepaiement,
+        etat: data.etat,
+        resolved_creatorPayType: creatorPayType,
+        resolved_isOnsitePayment: isOnsitePayment
+      });
 
       // Store the charge amount for later use
       let creatorCharge = 0;
