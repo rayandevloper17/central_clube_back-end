@@ -251,18 +251,28 @@ export default function ReservationService(models) {
 
       if (!hasCapacity) {
         console.log(`[ReservationService] ⚠️ Slot ${plage.id} is at capacity. Searching for siblings...`);
+        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${plage.start_time}, end_time=${plage.end_time}`);
         
-        // Find other slots with same Time + Terrain
-        const siblings = await models.plage_horaire.findAll({
-          where: {
-            terrain_id: plage.terrain_id,
-            start_time: plage.start_time,
-            end_time: plage.end_time,
-            id: { [Op.ne]: plage.id } // Exclude current
+        // 🔥 FIX: Use raw SQL for reliable time matching
+        const [siblings] = await models.sequelize.query(`
+          SELECT * FROM plage_horaire
+          WHERE terrain_id = :terrainId
+            AND id != :currentId
+            AND CAST(start_time AS TIME) = CAST(:startTime AS TIME)
+            AND CAST(end_time AS TIME) = CAST(:endTime AS TIME)
+          FOR UPDATE
+        `, {
+          replacements: {
+            terrainId: plage.terrain_id,
+            currentId: plage.id,
+            startTime: plage.start_time,
+            endTime: plage.end_time
           },
           transaction: t,
-          lock: t.LOCK.UPDATE // Lock them too
+          type: models.sequelize.QueryTypes.SELECT
         });
+
+        console.log(`[ReservationService] 🔍 Found ${siblings.length} sibling slot(s): [${siblings.map(s => s.id).join(', ')}]`);
 
         let freeSiblingFound = false;
 
@@ -270,10 +280,18 @@ export default function ReservationService(models) {
         for (const sibling of siblings) {
           const siblingHasCapacity = await hasAvailableCapacity(sibling.id, data.date, t);
           
+          console.log(`[ReservationService] 🔍 Checking sibling ${sibling.id}: hasCapacity=${siblingHasCapacity}`);
+          
           if (siblingHasCapacity) {
             // Found a slot with available capacity! Switch to it.
             console.log(`[ReservationService] ✅ Switching to sibling slot with capacity: ${sibling.id}`);
-            plage = sibling; // Update local reference
+            
+            // Re-fetch as model instance with lock
+            plage = await models.plage_horaire.findByPk(sibling.id, {
+              transaction: t,
+              lock: t.LOCK.UPDATE
+            });
+            
             data.id_plage_horaire = sibling.id; // Update payload ID
             freeSiblingFound = true;
             break; // Stop searching
@@ -281,7 +299,7 @@ export default function ReservationService(models) {
         }
 
         if (!freeSiblingFound) {
-          console.log(`[ReservationService] ❌ All slots for this time are at full capacity.`);
+          console.log(`[ReservationService] ❌ All ${siblings.length + 1} slot(s) for this time are at full capacity.`);
           const error = new Error('Tous les créneaux pour cette heure sont complets. Veuillez choisir une autre heure.');
           error.statusCode = 409;
           throw error;
