@@ -15,7 +15,7 @@ import { Op } from 'sequelize';
  */
 
 export default function ReservationService(models) {
-  
+
   // ════════════════════════════════════════════════════════════════════════════
   // UTILITY: Audit log for credit transactions
   // ════════════════════════════════════════════════════════════════════════════
@@ -49,27 +49,27 @@ export default function ReservationService(models) {
       transaction: t,
       lock: t?.LOCK?.UPDATE,
     });
-    
+
     if (existing) {
       console.log('[RefundService] Duplicate refund prevented for', auditKey);
       return false;
     }
 
-    const user = await models.utilisateur.findByPk(userId, { 
-      transaction: t, 
-      lock: t?.LOCK?.UPDATE 
+    const user = await models.utilisateur.findByPk(userId, {
+      transaction: t,
+      lock: t?.LOCK?.UPDATE
     });
-    
+
     if (!user) {
       console.log(`[RefundService] User ${userId} not found`);
       return false;
     }
-    
+
     const currentBalance = Number(user.credit_balance ?? 0);
     const newBalance = currentBalance + amount;
     await user.update({ credit_balance: newBalance }, { transaction: t });
     await logCreditTransaction(userId, amount, auditKey, t);
-    
+
     console.log(`[RefundService] Refunded user ${userId} amount=${amount} (${currentBalance} -> ${newBalance})`);
     return true;
   };
@@ -79,7 +79,7 @@ export default function ReservationService(models) {
   // ════════════════════════════════════════════════════════════════════════════
   const handleOpenMatchOverride = async (plageHoraireId, date, t, models) => {
     console.log('[Override] Starting override process for all pending matches', { plageHoraireId, date });
-    
+
     try {
       // Find all active reservations (Private OR Open) that are NOT confirmed (etat != 1)
       const openMatchReservations = await models.reservation.findAll({
@@ -100,7 +100,7 @@ export default function ReservationService(models) {
 
       for (const reservation of openMatchReservations) {
         // 1. Cancel the reservation
-        await reservation.update({ 
+        await reservation.update({
           isCancel: 1,
           etat: -1, // Mark as cancelled
           date_modif: new Date()
@@ -121,9 +121,9 @@ export default function ReservationService(models) {
         // Refund each user
         for (const userId of usersToRefund) {
           await refundUserIdempotent(
-            userId, 
-            reservation.prix_total, 
-            reservation.id, 
+            userId,
+            reservation.prix_total,
+            reservation.id,
             userId === reservation.id_utilisateur ? null : userId,
             t
           );
@@ -186,9 +186,9 @@ export default function ReservationService(models) {
 
     const activeReservations = existingReservations.length;
     const available = activeReservations < capacity;
-    
+
     console.log(`[Capacity Check] Slot ${plageHoraireId} on ${date}: ${activeReservations}/${capacity} - Available: ${available}`);
-    
+
     return available;
   };
 
@@ -219,9 +219,9 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 2: Lock user row for balance operations
       // ══════════════════════════════════════════════════════════════════════
-      const utilisateur = await models.utilisateur.findByPk(data.id_utilisateur, { 
-        transaction: t, 
-        lock: t.LOCK.UPDATE 
+      const utilisateur = await models.utilisateur.findByPk(data.id_utilisateur, {
+        transaction: t,
+        lock: t.LOCK.UPDATE
       });
       if (!utilisateur) {
         throw new Error("Utilisateur not found");
@@ -230,11 +230,11 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 3: CRITICAL - Lock the requested plage_horaire row
       // ══════════════════════════════════════════════════════════════════════
-      let plage = await models.plage_horaire.findByPk(data.id_plage_horaire, { 
-        transaction: t, 
+      let plage = await models.plage_horaire.findByPk(data.id_plage_horaire, {
+        transaction: t,
         lock: t.LOCK.UPDATE
       });
-      
+
       if (!plage) {
         throw new Error("Plage horaire not found");
       }
@@ -248,13 +248,13 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 4: 🔥 FIXED - SMART SLOT REASSIGNMENT (Proper Capacity Handling)
       // ══════════════════════════════════════════════════════════════════════
-      
+
       // Check if the requested slot has available capacity
       const hasCapacity = await hasAvailableCapacity(plage.id, data.date, t);
 
       if (!hasCapacity) {
         console.log(`[ReservationService] ⚠️ Slot ${plage.id} is at capacity. Searching for siblings...`);
-        
+
         // Extract time parts for comparison (handle both TIME and TIMESTAMP formats)
         const getTimeString = (timeVal) => {
           if (!timeVal) return null;
@@ -263,26 +263,29 @@ export default function ReservationService(models) {
           const d = new Date(timeVal);
           return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
         };
-        
+
         const startTimeStr = getTimeString(plage.start_time);
         const endTimeStr = getTimeString(plage.end_time);
-        
-        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${startTimeStr}, end_time=${endTimeStr}`);
-        
-        // 🔥 FIX: Use raw SQL for reliable time matching
+
+        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${startTimeStr}, end_time=${endTimeStr}, date=${data.date}`);
+
+        // 🔥 CRITICAL FIX: Use raw SQL for reliable time matching + DATE FILTERING
+        // MUST ensure sibling slots are on the SAME DATE as the reservation!
         const siblings = await models.sequelize.query(`
           SELECT * FROM plage_horaire
           WHERE terrain_id = :terrainId
             AND id != :currentId
             AND CAST(start_time AS TIME) = CAST(:startTime AS TIME)
             AND CAST(end_time AS TIME) = CAST(:endTime AS TIME)
+            AND DATE(start_time) = DATE(:reservationDate::timestamp)
           FOR UPDATE
         `, {
           replacements: {
             terrainId: plage.terrain_id,
             currentId: plage.id,
             startTime: startTimeStr,
-            endTime: endTimeStr
+            endTime: endTimeStr,
+            reservationDate: data.date  // ← CRITICAL: Filter by reservation date!
           },
           transaction: t,
           type: models.sequelize.QueryTypes.SELECT
@@ -295,19 +298,19 @@ export default function ReservationService(models) {
         // Check each sibling for available capacity
         for (const sibling of siblings) {
           const siblingHasCapacity = await hasAvailableCapacity(sibling.id, data.date, t);
-          
+
           console.log(`[ReservationService] 🔍 Checking sibling ${sibling.id}: hasCapacity=${siblingHasCapacity}`);
-          
+
           if (siblingHasCapacity) {
             // Found a slot with available capacity! Switch to it.
             console.log(`[ReservationService] ✅ Switching to sibling slot with capacity: ${sibling.id}`);
-            
+
             // Re-fetch as model instance with lock
             plage = await models.plage_horaire.findByPk(sibling.id, {
               transaction: t,
               lock: t.LOCK.UPDATE
             });
-            
+
             data.id_plage_horaire = sibling.id; // Update payload ID
             freeSiblingFound = true;
             break; // Stop searching
@@ -327,7 +330,7 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 5: Handle conflicts (Credit override for pending reservations)
       // ══════════════════════════════════════════════════════════════════════
-      
+
       // Even if we have capacity, check for conflict scenarios
       const existingReservations = await models.reservation.findAll({
         where: {
@@ -342,11 +345,11 @@ export default function ReservationService(models) {
       if (existingReservations.length > 0) {
         // 1. Check if ANY existing reservation is VALID (etat = 1)
         const validReservation = existingReservations.find(r => Number(r.etat) === 1);
-        
+
         // For capacity > 1, valid reservations can coexist
         const capacity = Number(plage.capacity ?? 1);
         const validCount = existingReservations.filter(r => Number(r.etat) === 1).length;
-        
+
         if (validCount >= capacity) {
           // Slot is fully booked with confirmed reservations
           const error = new Error('Ce créneau est complet avec des réservations confirmées.');
@@ -361,7 +364,7 @@ export default function ReservationService(models) {
         if (!isSurPlace) {
           // Credit payment can override pending reservations
           const pendingReservations = existingReservations.filter(r => Number(r.etat) !== 1);
-          
+
           if (pendingReservations.length > 0) {
             console.log('[ReservationService] "Credit" request -> Overriding pending reservations.');
             await handleOpenMatchOverride(data.id_plage_horaire, data.date, t, models);
@@ -373,8 +376,8 @@ export default function ReservationService(models) {
       // STEP 6: Validate and normalize price
       // ══════════════════════════════════════════════════════════════════════
       const plagePrice = Number(plage?.price);
-      const normalizedPrice = Number.isFinite(plagePrice) && plagePrice > 0 
-        ? plagePrice 
+      const normalizedPrice = Number.isFinite(plagePrice) && plagePrice > 0
+        ? plagePrice
         : 1;
 
       const typerVal = Number(data?.typer ?? 0);
@@ -389,7 +392,7 @@ export default function ReservationService(models) {
         if (!Number.isFinite(minFloat) || !Number.isFinite(maxFloat)) {
           throw new Error('Rating range (min/max) is required for Match Ouvert');
         }
-        
+
         if (minFloat > maxFloat) {
           throw new Error('Invalid rating range: min must be <= max');
         }
@@ -398,7 +401,7 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 8: Handle payment and balance deduction
       // ══════════════════════════════════════════════════════════════════════
-      
+
       // 🔥 FIX: More robust payment type detection
       const creatorPayType = (() => {
         if (data.typepaiementForCreator !== undefined && data.typepaiementForCreator !== null) {
@@ -409,11 +412,11 @@ export default function ReservationService(models) {
         }
         return 1; // Default to credit
       })();
-      
+
       const etatVal = Number(data?.etat ?? -1);
       const isOnsitePayment = (creatorPayType === 2) || (etatVal === 0);
       const shouldSkipDeduction = (typerVal === 1) && isOnsitePayment;
-      
+
       console.log(`[ReservationService] 💳 Payment detection:`, {
         typepaiementForCreator: data.typepaiementForCreator,
         typepaiement: data.typepaiement,
@@ -430,13 +433,13 @@ export default function ReservationService(models) {
         creatorCharge = normalizedPrice;
 
         const currentBalance = Number(utilisateur.credit_balance ?? 0);
-        
+
         if (!Number.isFinite(currentBalance) || currentBalance < creatorCharge) {
           throw new Error('Insufficient balance');
         }
-        
+
         await utilisateur.update(
-          { credit_balance: currentBalance - creatorCharge }, 
+          { credit_balance: currentBalance - creatorCharge },
           { transaction: t }
         );
       }
@@ -450,7 +453,7 @@ export default function ReservationService(models) {
       try {
         reservation = await models.reservation.create(payload, { transaction: t });
         console.log('[ReservationService] ✅ Created reservation', { id: reservation.id, slotId: plage.id });
-        
+
         // Record the credit_transaction AFTER reservation is created
         if (!shouldSkipDeduction && creatorCharge > 0) {
           await models.credit_transaction.create({
@@ -459,7 +462,7 @@ export default function ReservationService(models) {
             type: `debit:reservation:R${reservation.id}:U${data.id_utilisateur}:creator`,
             date_creation: new Date()
           }, { transaction: t });
-          
+
           // Notification: Credit Deduction
           await addNotification({
             recipient_id: data.id_utilisateur,
@@ -476,11 +479,11 @@ export default function ReservationService(models) {
           type: 'reservation_confirmed',
           message: `Votre réservation pour le ${data.date} a été confirmée avec succès.`
         });
-        
+
       } catch (insertError) {
         // Handle unique constraint violation
-        if (insertError.name === 'SequelizeUniqueConstraintError' || 
-            insertError.parent?.code === '23505') {
+        if (insertError.name === 'SequelizeUniqueConstraintError' ||
+          insertError.parent?.code === '23505') {
           console.log('[ReservationService] Unique constraint violation - slot taken by another user');
           const error = new Error('Ce créneau vient d\'être réservé par un autre joueur. Veuillez rafraîchir et choisir un autre créneau.');
           error.statusCode = 409;
@@ -492,7 +495,7 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 10: Update slot availability
       // ══════════════════════════════════════════════════════════════════════
-      
+
       // 🔍 DIAGNOSTIC LOGGING
       console.log(`[ReservationService] 🔍 Availability check:`, {
         typerVal,
@@ -501,7 +504,7 @@ export default function ReservationService(models) {
         isOnsitePayment,
         shouldMarkUnavailable: typerVal === 1 && !isOnsitePayment
       });
-      
+
       // For PRIVATE matches with CREDIT payment: Mark slot as unavailable immediately
       if (typerVal === 1 && !isOnsitePayment) {
         // Private match + Credit payment → Slot is now taken
@@ -510,7 +513,7 @@ export default function ReservationService(models) {
       } else if (typerVal !== 2 && !isOnsitePayment) {
         // For other cases: Check if this slot is now at full capacity
         const nowAtCapacity = !(await hasAvailableCapacity(plage.id, data.date, t));
-        
+
         if (nowAtCapacity) {
           await plage.update({ disponible: false }, { transaction: t });
           console.log(`[ReservationService] 🔒 Slot ${plage.id} marked as unavailable (at capacity)`);
@@ -518,6 +521,9 @@ export default function ReservationService(models) {
       } else {
         console.log(`[ReservationService] ℹ️ Slot ${plage.id} kept available (typer=${typerVal}, onsite=${isOnsitePayment})`);
       }
+
+
+
 
       // ══════════════════════════════════════════════════════════════════════
       // STEP 11: Create participant record for creator
@@ -530,6 +536,9 @@ export default function ReservationService(models) {
         typepaiement: shouldSkipDeduction ? 2 : 1,
         team: 0,
       }, { transaction: t });
+
+
+
 
       // ══════════════════════════════════════════════════════════════════════
       // STEP 12: COMMIT - Release all locks
@@ -554,9 +563,9 @@ export default function ReservationService(models) {
       console.error('[ReservationService] Transaction rolled back:', err.message);
 
       if (err.name === 'SequelizeDatabaseError' || err.message?.includes('deadlock')) {
-         const error = new Error('Ce créneau vient d\'être réservé par un autre joueur. Veuillez rafraîchir.');
-         error.statusCode = 409;
-         throw error;
+        const error = new Error('Ce créneau vient d\'être réservé par un autre joueur. Veuillez rafraîchir.');
+        error.statusCode = 409;
+        throw error;
       }
 
       if (err.statusCode) {
@@ -666,7 +675,7 @@ export default function ReservationService(models) {
       ],
       order: [['date', 'ASC']]
     });
-    
+
     return rows.filter((r) => {
       const typerVal = Number.parseInt((r.typer ?? 0).toString());
       const count = Array.isArray(r.participants) ? r.participants.length : 0;
@@ -682,17 +691,17 @@ export default function ReservationService(models) {
   const update = async (id, data) => {
     const reservation = await models.reservation.findByPk(id);
     if (!reservation) throw new Error("Reservation not found");
-    
+
     const isStatusUpdateToValid = data.etat === 'valid' && reservation.etat !== 'valid';
-    const isOpenMatch = reservation.typer === 2; 
-    
+    const isOpenMatch = reservation.typer === 2;
+
     if (isStatusUpdateToValid && isOpenMatch) {
       const plage = await models.plage_horaire.findByPk(reservation.id_plage_horaire);
       if (plage) {
         await plage.update({ disponible: false });
       }
     }
-    
+
     await reservation.update(data);
     return await findById(id);
   };
@@ -709,15 +718,15 @@ export default function ReservationService(models) {
 
   const cancel = async (id, cancellingUserId) => {
     const t = await models.sequelize.transaction();
-    
+
     try {
       console.log(`💰 [CancelService] Starting cancellation for reservation ${id}`);
-      
-      const reservation = await models.reservation.findByPk(id, { 
-        transaction: t, 
-        lock: t.LOCK.UPDATE 
+
+      const reservation = await models.reservation.findByPk(id, {
+        transaction: t,
+        lock: t.LOCK.UPDATE
       });
-      
+
       if (!reservation) {
         throw new Error('Reservation not found');
       }
@@ -740,10 +749,10 @@ export default function ReservationService(models) {
       }
 
       const plage = reservation.id_plage_horaire
-        ? await models.plage_horaire.findByPk(reservation.id_plage_horaire, { 
-            transaction: t, 
-            lock: t.LOCK.UPDATE 
-          })
+        ? await models.plage_horaire.findByPk(reservation.id_plage_horaire, {
+          transaction: t,
+          lock: t.LOCK.UPDATE
+        })
         : null;
 
       const participants = await models.participant.findAll({
@@ -753,7 +762,7 @@ export default function ReservationService(models) {
       });
 
       const creatorParticipant = participants.find(p => Boolean(p.est_createur));
-      const isCancellerCreator = !!creatorParticipant && 
+      const isCancellerCreator = !!creatorParticipant &&
         Number(creatorParticipant.id_utilisateur) === Number(cancellingUserId);
 
       const slotPrice = (() => {
@@ -780,7 +789,7 @@ export default function ReservationService(models) {
         }
 
         await reservation.update({ isCancel: 1, etat: 3, date_modif: new Date() }, { transaction: t });
-        
+
         // Notify others
         for (const p of participants) {
           if (Number(p.id_utilisateur) !== Number(cancellingUserId)) {
@@ -815,11 +824,11 @@ export default function ReservationService(models) {
 
         await models.participant.destroy({ where: { id_reservation: id, id_utilisateur: cancellingUserId }, transaction: t });
         await reservation.update({ date_modif: new Date() }, { transaction: t });
-        
+
         // Notify
         for (const p of participants) {
           if (Number(p.id_utilisateur) !== Number(cancellingUserId)) {
-             addNotification({
+            addNotification({
               recipient_id: p.id_utilisateur,
               reservation_id: reservation.id,
               type: 'participant_cancelled',
@@ -844,7 +853,7 @@ export default function ReservationService(models) {
 
   const processStatusRefunds = async () => {
     const t = await models.sequelize.transaction();
-    
+
     try {
       const reservations = await models.reservation.findAll({
         where: { isCancel: 0 },
@@ -860,7 +869,7 @@ export default function ReservationService(models) {
           ]);
           reservation.dataValues.plage_horaire = plageHoraire;
           reservation.dataValues.participants = participants;
-        } catch (e) {}
+        } catch (e) { }
       }
 
       const bySlot = new Map();
