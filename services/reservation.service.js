@@ -470,6 +470,16 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 10: Update slot availability
       // ══════════════════════════════════════════════════════════════════════
+      
+      // 🔍 DIAGNOSTIC LOGGING
+      console.log(`[ReservationService] 🔍 Availability check:`, {
+        typerVal,
+        creatorPayType,
+        etatVal,
+        isOnsitePayment,
+        shouldMarkUnavailable: typerVal === 1 && !isOnsitePayment
+      });
+      
       // For PRIVATE matches with CREDIT payment: Mark slot as unavailable immediately
       if (typerVal === 1 && !isOnsitePayment) {
         // Private match + Credit payment → Slot is now taken
@@ -483,6 +493,8 @@ export default function ReservationService(models) {
           await plage.update({ disponible: false }, { transaction: t });
           console.log(`[ReservationService] 🔒 Slot ${plage.id} marked as unavailable (at capacity)`);
         }
+      } else {
+        console.log(`[ReservationService] ℹ️ Slot ${plage.id} kept available (typer=${typerVal}, onsite=${isOnsitePayment})`);
       }
 
       // ══════════════════════════════════════════════════════════════════════
