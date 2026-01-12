@@ -157,8 +157,11 @@ export default function ReservationService(models) {
 
   // ════════════════════════════════════════════════════════════════════════════
   // 🔥 FIXED: Check if a slot has available capacity with PROPER LOCKING
+  // 
+  // IMPORTANT: For open matches (typer=2), we allow MULTIPLE pending reservations
+  // to compete. Only when one reaches 4 players does it "win" and others are cancelled.
   // ════════════════════════════════════════════════════════════════════════════
-  const hasAvailableCapacity = async (plageHoraireId, date, t) => {
+  const hasAvailableCapacity = async (plageHoraireId, date, t, reservationType = null) => {
     // Get the plage_horaire to check its capacity
     const plage = await models.plage_horaire.findByPk(plageHoraireId, {
       transaction: t,
@@ -174,20 +177,36 @@ export default function ReservationService(models) {
 
     // 🔥 CRITICAL FIX: Lock ALL existing reservations for this slot+date
     // This prevents race conditions where 2 users see count=0 simultaneously
+    //
+    // BUT: For open matches (typer=2), only count VALID ones (etat=1)
+    // This allows multiple pending open matches to compete
+    const whereClause = {
+      id_plage_horaire: plageHoraireId,
+      date: date,
+      isCancel: 0
+    };
+
+    // If creating an open match (typer=2), only count:
+    // - Valid open matches (typer=2, etat=1)
+    // - All private matches (typer=1)
+    if (reservationType === 2) {
+      // For open matches: only count already-valid matches or private matches
+      whereClause[models.Sequelize.Op.or] = [
+        { typer: 1 }, // All private matches
+        { typer: 2, etat: 1 } // Only VALID open matches
+      ];
+    }
+
     const existingReservations = await models.reservation.findAll({
-      where: {
-        id_plage_horaire: plageHoraireId,
-        date: date,
-        isCancel: 0
-      },
+      where: whereClause,
       transaction: t,
-      lock: t.LOCK.UPDATE  // ← THIS IS THE FIX!
+      lock: t.LOCK.UPDATE
     });
 
     const activeReservations = existingReservations.length;
     const available = activeReservations < capacity;
 
-    console.log(`[Capacity Check] Slot ${plageHoraireId} on ${date}: ${activeReservations}/${capacity} - Available: ${available}`);
+    console.log(`[Capacity Check] Slot ${plageHoraireId} on ${date}: ${activeReservations}/${capacity} (type=${reservationType}) - Available: ${available}`);
 
     return available;
   };
@@ -245,12 +264,15 @@ export default function ReservationService(models) {
         capacity: plage.capacity ?? 1
       });
 
+      // Extract and normalize typer value (needed for capacity checks)
+      const typerVal = Number(data?.typer ?? 1);
+
       // ══════════════════════════════════════════════════════════════════════
       // STEP 4: 🔥 FIXED - SMART SLOT REASSIGNMENT (Proper Capacity Handling)
       // ══════════════════════════════════════════════════════════════════════
 
       // Check if the requested slot has available capacity
-      const hasCapacity = await hasAvailableCapacity(plage.id, data.date, t);
+      const hasCapacity = await hasAvailableCapacity(plage.id, data.date, t, typerVal);
 
       if (!hasCapacity) {
         console.log(`[ReservationService] ⚠️ Slot ${plage.id} is at capacity. Searching for siblings...`);
@@ -297,7 +319,7 @@ export default function ReservationService(models) {
 
         // Check each sibling for available capacity
         for (const sibling of siblings) {
-          const siblingHasCapacity = await hasAvailableCapacity(sibling.id, data.date, t);
+          const siblingHasCapacity = await hasAvailableCapacity(sibling.id, data.date, t, typerVal);
 
           console.log(`[ReservationService] 🔍 Checking sibling ${sibling.id}: hasCapacity=${siblingHasCapacity}`);
 
@@ -379,8 +401,6 @@ export default function ReservationService(models) {
       const normalizedPrice = Number.isFinite(plagePrice) && plagePrice > 0
         ? plagePrice
         : 1;
-
-      const typerVal = Number(data?.typer ?? 0);
 
       // ══════════════════════════════════════════════════════════════════════
       // STEP 7: Validate rating range for open matches
@@ -512,7 +532,7 @@ export default function ReservationService(models) {
         console.log(`[ReservationService] 🔒 Slot ${plage.id} marked as unavailable (private + credit)`);
       } else if (typerVal !== 2 && !isOnsitePayment) {
         // For other cases: Check if this slot is now at full capacity
-        const nowAtCapacity = !(await hasAvailableCapacity(plage.id, data.date, t));
+        const nowAtCapacity = !(await hasAvailableCapacity(plage.id, data.date, t, typerVal));
 
         if (nowAtCapacity) {
           await plage.update({ disponible: false }, { transaction: t });
@@ -806,7 +826,8 @@ export default function ReservationService(models) {
 
         // 🔥 FIXED: Re-enable slot if it now has capacity
         if (plage) {
-          const stillHasCapacity = await hasAvailableCapacity(plage.id, reservation.date, t);
+          const reservationTyper = Number(reservation.typer ?? 1);
+          const stillHasCapacity = await hasAvailableCapacity(plage.id, reservation.date, t, reservationTyper);
           if (stillHasCapacity) {
             await plage.update({ disponible: true }, { transaction: t });
             console.log(`[CancelService] ✅ Slot ${plage.id} re-enabled (has capacity after cancellation)`);
