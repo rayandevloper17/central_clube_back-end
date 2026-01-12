@@ -3,19 +3,13 @@ import { Op } from 'sequelize';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════════
- * RESERVATION SERVICE - Production-Ready with Smart Capacity Management
+ * RESERVATION SERVICE - FIXED: Proper Multi-Capacity Slot Management
  * ════════════════════════════════════════════════════════════════════════════════
  * 
- * FEATURES:
- * 1. SMART SLOT ASSIGNMENT (Capacity Management)
- *    - If a slot is busy, automatically finds a free "sibling" slot (same time/terrain)
- *    - Solves the "multiple users blocking each other" issue
- * 
- * 2. CONCURRENCY SAFETY
- *    - Uses FOR UPDATE locks to prevent race conditions
- * 
- * 3. OVERRIDE LOGIC
- *    - Allows paid (Credit) reservations to override pending (Sur place) ones
+ * CRITICAL FIX:
+ * - Now properly checks CAPACITY vs RESERVATION COUNT
+ * - A slot is only "full" when: active_reservations >= capacity
+ * - Supports multiple concurrent users booking the same time slot
  * 
  * ════════════════════════════════════════════════════════════════════════════════
  */
@@ -162,6 +156,40 @@ export default function ReservationService(models) {
   };
 
   // ════════════════════════════════════════════════════════════════════════════
+  // 🔥 FIXED: Check if a slot has available capacity
+  // ════════════════════════════════════════════════════════════════════════════
+  const hasAvailableCapacity = async (plageHoraireId, date, t) => {
+    // Get the plage_horaire to check its capacity
+    const plage = await models.plage_horaire.findByPk(plageHoraireId, {
+      transaction: t,
+      lock: t.LOCK.UPDATE
+    });
+
+    if (!plage) {
+      return false;
+    }
+
+    // Get capacity (default to 1 if not set)
+    const capacity = Number(plage.capacity ?? 1);
+
+    // Count active reservations for this slot on this date
+    const activeReservations = await models.reservation.count({
+      where: {
+        id_plage_horaire: plageHoraireId,
+        date: date,
+        isCancel: 0
+      },
+      transaction: t
+    });
+
+    const available = activeReservations < capacity;
+    
+    console.log(`[Capacity Check] Slot ${plageHoraireId}: ${activeReservations}/${capacity} - Available: ${available}`);
+    
+    return available;
+  };
+
+  // ════════════════════════════════════════════════════════════════════════════
   // MAIN: Create Reservation with Smart Capacity & Race Condition Protection
   // ════════════════════════════════════════════════════════════════════════════
   const create = async (data) => {
@@ -199,7 +227,6 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 3: CRITICAL - Lock the requested plage_horaire row
       // ══════════════════════════════════════════════════════════════════════
-      // We use 'let' because we might swap it for a sibling if this one is full
       let plage = await models.plage_horaire.findByPk(data.id_plage_horaire, { 
         transaction: t, 
         lock: t.LOCK.UPDATE
@@ -211,26 +238,19 @@ export default function ReservationService(models) {
 
       console.log('[ReservationService] Acquired lock on plage_horaire', {
         id: plage.id,
-        disponible: plage.disponible
+        disponible: plage.disponible,
+        capacity: plage.capacity ?? 1
       });
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 4: SMART SLOT REASSIGNMENT (Capacity Handling)
+      // STEP 4: 🔥 FIXED - SMART SLOT REASSIGNMENT (Proper Capacity Handling)
       // ══════════════════════════════════════════════════════════════════════
-      // Check for ANY active reservation on this SPECIFIC slot
-      let existingReservations = await models.reservation.findAll({
-        where: {
-          id_plage_horaire: plage.id, // Use plage.id (current candidate)
-          date: data.date,
-          isCancel: 0
-        },
-        transaction: t,
-        lock: t.LOCK.UPDATE
-      });
+      
+      // Check if the requested slot has available capacity
+      const hasCapacity = await hasAvailableCapacity(plage.id, data.date, t);
 
-      // If the specific slot is taken, look for FREE SIBLINGS (Capacity > 1)
-      if (existingReservations.length > 0) {
-        console.log(`[ReservationService] Slot ${plage.id} is busy. Searching for siblings...`);
+      if (!hasCapacity) {
+        console.log(`[ReservationService] ⚠️ Slot ${plage.id} is at capacity. Searching for siblings...`);
         
         // Find other slots with same Time + Terrain
         const siblings = await models.plage_horaire.findAll({
@@ -246,65 +266,72 @@ export default function ReservationService(models) {
 
         let freeSiblingFound = false;
 
+        // Check each sibling for available capacity
         for (const sibling of siblings) {
-           // Check availability for this sibling
-           const siblingReservation = await models.reservation.findOne({
-              where: {
-                id_plage_horaire: sibling.id,
-                date: data.date,
-                isCancel: 0
-              },
-              transaction: t
-           });
-           
-           if (!siblingReservation) {
-             // Found a free slot! Switch to it.
-             console.log(`[ReservationService] ✅ Switching to free sibling slot: ${sibling.id}`);
-             plage = sibling; // Update local reference
-             data.id_plage_horaire = sibling.id; // Update payload ID
-             existingReservations = []; // Clear conflict list
-             freeSiblingFound = true;
-             break; // Stop searching
-           }
+          const siblingHasCapacity = await hasAvailableCapacity(sibling.id, data.date, t);
+          
+          if (siblingHasCapacity) {
+            // Found a slot with available capacity! Switch to it.
+            console.log(`[ReservationService] ✅ Switching to sibling slot with capacity: ${sibling.id}`);
+            plage = sibling; // Update local reference
+            data.id_plage_horaire = sibling.id; // Update payload ID
+            freeSiblingFound = true;
+            break; // Stop searching
+          }
         }
 
         if (!freeSiblingFound) {
-          console.log(`[ReservationService] ❌ All sibling slots are full.`);
-          // If no siblings are free, we proceed with 'existingReservations' populated,
-          // which will trigger the Conflict Resolution logic below (Step 5).
+          console.log(`[ReservationService] ❌ All slots for this time are at full capacity.`);
+          const error = new Error('Tous les créneaux pour cette heure sont complets. Veuillez choisir une autre heure.');
+          error.statusCode = 409;
+          throw error;
         }
+      } else {
+        console.log(`[ReservationService] ✅ Slot ${plage.id} has available capacity.`);
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 5: Handle conflicts (if NO free slot was found)
+      // STEP 5: Handle conflicts (Credit override for pending reservations)
       // ══════════════════════════════════════════════════════════════════════
+      
+      // Even if we have capacity, check for conflict scenarios
+      const existingReservations = await models.reservation.findAll({
+        where: {
+          id_plage_horaire: plage.id,
+          date: data.date,
+          isCancel: 0
+        },
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
+
       if (existingReservations.length > 0) {
         // 1. Check if ANY existing reservation is VALID (etat = 1)
         const validReservation = existingReservations.find(r => Number(r.etat) === 1);
         
-        if (validReservation) {
-           // If a valid reservation exists, NO ONE can override it.
-           const error = new Error('Ce créneau est déjà réservé et confirmé par un autre joueur.');
-           error.statusCode = 409;
-           throw error;
+        // For capacity > 1, valid reservations can coexist
+        const capacity = Number(plage.capacity ?? 1);
+        const validCount = existingReservations.filter(r => Number(r.etat) === 1).length;
+        
+        if (validCount >= capacity) {
+          // Slot is fully booked with confirmed reservations
+          const error = new Error('Ce créneau est complet avec des réservations confirmées.');
+          error.statusCode = 409;
+          throw error;
         }
 
-        // 2. All existing reservations are PENDING. Determine action based on Payment Type.
+        // 2. Handle pending vs Credit payment conflict
         const requestedPayType = Number(data?.typepaiementForCreator ?? data?.typepaiement ?? 1);
         const isSurPlace = requestedPayType === 2; // 2 = Sur place (Pending)
 
-        if (isSurPlace) {
-           // SCENARIO: Sur place (Pending) vs Pending
-           // ACTION: Allow Co-existence. Do NOT cancel others.
-           console.log('[ReservationService] "Sur place" request -> Allowing co-existence with other pending reservations.');
-           // We simply proceed to creation. The DB will hold multiple "etat: 0" reservations.
-        } else {
-           // SCENARIO: Credit (Valid) vs Pending
-           // ACTION: Cancel ALL existing pending reservations to free the slot.
-           console.log('[ReservationService] "Credit" request -> Overriding all pending reservations.');
-           
-           // Call override function to clear the path
-           await handleOpenMatchOverride(data.id_plage_horaire, data.date, t, models);
+        if (!isSurPlace) {
+          // Credit payment can override pending reservations
+          const pendingReservations = existingReservations.filter(r => Number(r.etat) !== 1);
+          
+          if (pendingReservations.length > 0) {
+            console.log('[ReservationService] "Credit" request -> Overriding pending reservations.');
+            await handleOpenMatchOverride(data.id_plage_horaire, data.date, t, models);
+          }
         }
       }
 
@@ -369,11 +396,9 @@ export default function ReservationService(models) {
       let reservation;
       try {
         reservation = await models.reservation.create(payload, { transaction: t });
-        console.log('[ReservationService] Created reservation', { id: reservation.id });
+        console.log('[ReservationService] ✅ Created reservation', { id: reservation.id, slotId: plage.id });
         
-        // ════════════════════════════════════════════════════════════════════
-        // CRITICAL: Record the credit_transaction AFTER reservation is created
-        // ════════════════════════════════════════════════════════════════════
+        // Record the credit_transaction AFTER reservation is created
         if (!shouldSkipDeduction && creatorCharge > 0) {
           await models.credit_transaction.create({
             id_utilisateur: data.id_utilisateur,
@@ -382,7 +407,7 @@ export default function ReservationService(models) {
             date_creation: new Date()
           }, { transaction: t });
           
-          // ✅ NOTIFICATION: Credit Deduction
+          // Notification: Credit Deduction
           await addNotification({
             recipient_id: data.id_utilisateur,
             reservation_id: reservation.id,
@@ -391,7 +416,7 @@ export default function ReservationService(models) {
           });
         }
 
-        // ✅ NOTIFICATION: Reservation Confirmation
+        // Notification: Reservation Confirmation
         await addNotification({
           recipient_id: data.id_utilisateur,
           reservation_id: reservation.id,
@@ -412,12 +437,16 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 10: Mark slot as unavailable (only for private matches)
+      // STEP 10: Update slot availability (only mark unavailable if at capacity)
       // ══════════════════════════════════════════════════════════════════════
-      // NOTE: With smart reassignment, this only marks the *specific* assigned ID.
-      // Other siblings remain 'disponible: true' (if they were true).
       if (typerVal !== 2 && !isOnsitePayment) {
-        await plage.update({ disponible: false }, { transaction: t });
+        // Check if this slot is now at full capacity
+        const nowAtCapacity = !(await hasAvailableCapacity(plage.id, data.date, t));
+        
+        if (nowAtCapacity) {
+          await plage.update({ disponible: false }, { transaction: t });
+          console.log(`[ReservationService] 🔒 Slot ${plage.id} marked as unavailable (at capacity)`);
+        }
       }
 
       // ══════════════════════════════════════════════════════════════════════
@@ -696,11 +725,13 @@ export default function ReservationService(models) {
 
         await models.participant.destroy({ where: { id_reservation: id }, transaction: t });
 
-        // FREE UP THE SLOT
-        // Since we are using smart reassignment, freeing this specific ID makes it available 
-        // for the next "Smart Search" to find.
+        // 🔥 FIXED: Re-enable slot if it now has capacity
         if (plage) {
-          await plage.update({ disponible: true }, { transaction: t });
+          const stillHasCapacity = await hasAvailableCapacity(plage.id, reservation.date, t);
+          if (stillHasCapacity) {
+            await plage.update({ disponible: true }, { transaction: t });
+            console.log(`[CancelService] ✅ Slot ${plage.id} re-enabled (has capacity after cancellation)`);
+          }
         }
 
       } else {
