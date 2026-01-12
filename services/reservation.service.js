@@ -179,22 +179,28 @@ export default function ReservationService(models) {
     // 🔥 CRITICAL FIX: Lock ALL existing reservations for this slot+date
     // This prevents race conditions where 2 users see count=0 simultaneously
     //
-    // BUT: For open matches (typer=2), only count VALID ones (etat=1)
-    // This allows multiple pending open matches to compete
+    // COUNTING RULES:
+    // - For OPEN matches (typer=2): Only count valid open matches + private matches
+    // - For PRIVATE matches (typer=1): Only count private matches + valid open matches
+    //   (pending open matches will be cancelled, so don't count them)
     const whereClause = {
       id_plage_horaire: plageHoraireId,
       date: date,
       isCancel: 0
     };
 
-    // If creating an open match (typer=2), only count:
-    // - Valid open matches (typer=2, etat=1)
-    // - All private matches (typer=1)
     if (reservationType === 2) {
-      // For open matches: only count already-valid matches or private matches
+      // For OPEN match creation: only count already-valid matches or private matches
       whereClause[models.Sequelize.Op.or] = [
         { typer: 1 }, // All private matches
         { typer: 2, etat: 1 } // Only VALID open matches
+      ];
+    } else if (reservationType === 1) {
+      // For PRIVATE match creation: only count private matches + valid open matches
+      // Don't count pending open matches (etat=0) because they will be cancelled
+      whereClause[models.Sequelize.Op.or] = [
+        { typer: 1 }, // All private matches
+        { typer: 2, etat: 1 } // Only VALID open matches (not pending)
       ];
     }
 
