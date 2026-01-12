@@ -251,10 +251,23 @@ export default function ReservationService(models) {
 
       if (!hasCapacity) {
         console.log(`[ReservationService] ⚠️ Slot ${plage.id} is at capacity. Searching for siblings...`);
-        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${plage.start_time}, end_time=${plage.end_time}`);
+        
+        // Extract time parts for comparison (handle both TIME and TIMESTAMP formats)
+        const getTimeString = (timeVal) => {
+          if (!timeVal) return null;
+          if (typeof timeVal === 'string') return timeVal;
+          // If it's a Date object, extract HH:MM:SS
+          const d = new Date(timeVal);
+          return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+        };
+        
+        const startTimeStr = getTimeString(plage.start_time);
+        const endTimeStr = getTimeString(plage.end_time);
+        
+        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${startTimeStr}, end_time=${endTimeStr}`);
         
         // 🔥 FIX: Use raw SQL for reliable time matching
-        const [siblings] = await models.sequelize.query(`
+        const siblings = await models.sequelize.query(`
           SELECT * FROM plage_horaire
           WHERE terrain_id = :terrainId
             AND id != :currentId
@@ -265,8 +278,8 @@ export default function ReservationService(models) {
           replacements: {
             terrainId: plage.terrain_id,
             currentId: plage.id,
-            startTime: plage.start_time,
-            endTime: plage.end_time
+            startTime: startTimeStr,
+            endTime: endTimeStr
           },
           transaction: t,
           type: models.sequelize.QueryTypes.SELECT
