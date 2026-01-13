@@ -114,20 +114,38 @@ export default function ReservationService(models) {
           lock: t.LOCK.UPDATE
         });
 
-        // 3. Refund all participants (including the creator)
-        const usersToRefund = new Set();
-        usersToRefund.add(reservation.id_utilisateur);
-        participants.forEach(participant => usersToRefund.add(participant.id_utilisateur));
+        console.log(`[Override] Found ${participants.length} participants to refund for reservation ${reservation.id}`);
 
-        // Refund each user
-        for (const userId of usersToRefund) {
-          await refundUserIdempotent(
-            userId,
-            reservation.prix_total,
-            reservation.id,
-            userId === reservation.id_utilisateur ? null : userId,
-            t
-          );
+        // 3. Refund ALL users who PAID (statepaiement=1)
+        // This includes the creator and any joiners
+        for (const participant of participants) {
+          // Only refund if they actually paid
+          if (Number(participant.statepaiement) === 1) {
+            const user = await models.utilisateur.findByPk(participant.id_utilisateur, {
+              transaction: t,
+              lock: t.LOCK.UPDATE
+            });
+
+            if (user) {
+              const refundAmount = Number(reservation.prix_total ?? 0);
+              const currentBalance = Number(user.credit_balance ?? 0);
+              await user.update({
+                credit_balance: currentBalance + refundAmount
+              }, { transaction: t });
+
+              // Log the refund
+              await logCreditTransaction(
+                participant.id_utilisateur,
+                refundAmount,
+                `refund:override:R${reservation.id}:U${participant.id_utilisateur}`,
+                t
+              );
+
+              console.log(`[Override] Refunded ${refundAmount} to user ${participant.id_utilisateur} (${currentBalance} -> ${currentBalance + refundAmount})`);
+            }
+          } else {
+            console.log(`[Override] Skipping refund for user ${participant.id_utilisateur} (statepaiement=${participant.statepaiement})`);
+          }
         }
 
         // 4. Remove all participants
