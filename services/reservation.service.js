@@ -75,77 +75,129 @@ export default function ReservationService(models) {
   };
 
   // ════════════════════════════════════════════════════════════════════════════
-  // UTILITY: Cancel pending OPEN matches when a PRIVATE match is created
+  // CRITICAL FIX: handleValidMatchCreated
+  // 
+  // RULE: When a VALID match is created (etat=1), cancel ALL other reservations
+  //       for the same slot+date, regardless of type or status
+  // 
+  // SCENARIOS:
+  // 1. Private match created with credit (typer=1, etat=1)
+  //    → Cancel ALL other reservations (private + open, pending + confirmed)
+  // 
+  // 2. Open match reaches 4 players (typer=2, etat=1) 
+  //    → Cancel ALL other open matches for same slot+date
+  // 
+  // REFUND RULE:
+  // - Refund ALL participants who paid
+  // - EXCEPT the user who created the new valid match
   // ════════════════════════════════════════════════════════════════════════════
-  const handleOpenMatchOverride = async (plageHoraireId, date, privateMatchUserId, t, models) => {
-    console.log('[Override] PRIVATE match created -> Cancelling pending OPEN matches', {
+  const handleValidMatchCreated = async (plageHoraireId, date, newValidReservationId, creatorUserId, t, models) => {
+    console.log('[ValidMatch] Valid match created - cancelling ALL other reservations', {
       plageHoraireId,
       date,
-      privateMatchUserId
+      newValidReservationId,
+      creatorUserId
     });
 
     try {
-      // Find all active reservations (Private OR Open) that are NOT confirmed (etat != 1)
-      const openMatchReservations = await models.reservation.findAll({
-        where: {
-          id_plage_horaire: plageHoraireId,
-          date: date,
-          typer: { [models.Sequelize.Op.or]: [1, 2] }, // Target BOTH Private (1) and Open (2)
-          isCancel: 0,
-          etat: { [models.Sequelize.Op.ne]: 1 } // etat ≠ 1 (invalid/pending reservations)
-        },
+      // Get the new valid reservation to check its type
+      const newReservation = await models.reservation.findByPk(newValidReservationId, {
         transaction: t,
         lock: t.LOCK.UPDATE
       });
 
-      console.log('[Override] Found pending reservations to cancel', {
-        count: openMatchReservations.length
+      if (!newReservation) {
+        console.log('[ValidMatch] New reservation not found, aborting cancellation');
+        return;
+      }
+
+      const newReservationType = Number(newReservation.typer);
+
+      // Build where clause based on new reservation type
+      let whereClause = {
+        id_plage_horaire: plageHoraireId,
+        date: date,
+        isCancel: 0,
+        id: { [models.Sequelize.Op.ne]: newValidReservationId } // Exclude the new valid match
+      };
+
+      if (newReservationType === 1) {
+        // PRIVATE match created → Cancel ALL types (private + open)
+        console.log('[ValidMatch] PRIVATE match created → Cancelling ALL reservation types');
+      } else if (newReservationType === 2) {
+        // OPEN match became valid → Cancel only OTHER OPEN matches
+        console.log('[ValidMatch] OPEN match became valid → Cancelling other OPEN matches');
+        whereClause.typer = 2;
+      }
+
+      // Find ALL reservations to cancel (regardless of etat status)
+      const reservationsToCancel = await models.reservation.findAll({
+        where: whereClause,
+        transaction: t,
+        lock: t.LOCK.UPDATE
       });
 
-      for (const reservation of openMatchReservations) {
+      console.log(`[ValidMatch] Found ${reservationsToCancel.length} reservation(s) to cancel`);
+
+      for (const reservation of reservationsToCancel) {
+        console.log(`[ValidMatch] Processing cancellation for reservation ${reservation.id} (typer=${reservation.typer}, etat=${reservation.etat})`);
+
         // 1. Cancel the reservation
         await reservation.update({
           isCancel: 1,
-          etat: -1, // Mark as cancelled
+          etat: -1,
           date_modif: new Date()
         }, { transaction: t });
 
-        // 2. Find all participants for this reservation
+        // 2. Find all participants
         const participants = await models.participant.findAll({
           where: { id_reservation: reservation.id },
           transaction: t,
           lock: t.LOCK.UPDATE
         });
 
-        // 3. STEP-BY-STEP REFUND PROCESS
-        // ═══════════════════════════════════════════════════════════════════════
-        // STEP 1: Refund all participants who PAID
-        // STEP 2: Verify refunds completed
-        // STEP 3: THEN the private match charge happens (in caller)
-        // ═══════════════════════════════════════════════════════════════════════
+        console.log(`[ValidMatch] Found ${participants.length} participant(s) in reservation ${reservation.id}`);
 
-        console.log(`[Override] � STEP 1: Starting refunds for reservation ${reservation.id}`);
+        // 3. Build list of users to refund
+        const usersToRefund = new Set();
 
-        // Track who needs refunds and who was refunded
-        const refundResults = [];
+        // Add reservation creator
+        usersToRefund.add(reservation.id_utilisateur);
 
-        // A. Refund all participants who have participant records
-        for (const participant of participants) {
-          // Skip if they're creating the private match (they'll pay instead)
-          if (Number(participant.id_utilisateur) === Number(privateMatchUserId)) {
-            console.log(`[Override] ⏭️  Skipping participant ${participant.id_utilisateur} - creating private match`);
+        // Add all participants
+        participants.forEach(p => usersToRefund.add(p.id_utilisateur));
+
+        // 4. Refund each user (EXCEPT the creator of the new valid match)
+        const refundAmount = Number(reservation.prix_total ?? 0);
+
+        for (const userId of usersToRefund) {
+          // Skip if this is the creator of the new valid match
+          if (Number(userId) === Number(creatorUserId)) {
+            console.log(`[ValidMatch] ⏭️  Skipping refund for user ${userId} - they created the new valid match`);
             continue;
           }
 
-          // Only refund if they paid
-          if (Number(participant.statepaiement) === 1) {
-            const user = await models.utilisateur.findByPk(participant.id_utilisateur, {
+          // Check if this user actually paid
+          const userDebit = await models.credit_transaction.findOne({
+            where: {
+              id_utilisateur: userId,
+              [models.Sequelize.Op.or]: [
+                { type: `debit:reservation:R${reservation.id}:U${userId}:creator` },
+                { type: { [models.Sequelize.Op.like]: `debit:join:R${reservation.id}:U${userId}%` } }
+              ],
+              nombre: { [models.Sequelize.Op.lt]: 0 } // Negative = debit
+            },
+            transaction: t
+          });
+
+          if (userDebit) {
+            // User paid, so refund them
+            const user = await models.utilisateur.findByPk(userId, {
               transaction: t,
               lock: t.LOCK.UPDATE
             });
 
             if (user) {
-              const refundAmount = Number(reservation.prix_total ?? 0);
               const balanceBefore = Number(user.credit_balance ?? 0);
               const balanceAfter = balanceBefore + refundAmount;
 
@@ -153,88 +205,21 @@ export default function ReservationService(models) {
                 credit_balance: balanceAfter
               }, { transaction: t });
 
-              await logCreditTransaction(
-                participant.id_utilisateur,
-                refundAmount,
-                `refund:override:R${reservation.id}:U${participant.id_utilisateur}`,
-                t
-              );
-
-              refundResults.push({
-                userId: participant.id_utilisateur,
-                amount: refundAmount,
-                success: true,
-                balanceBefore,
-                balanceAfter
-              });
-
-              console.log(`[Override] ✅ Refunded ${refundAmount} to participant ${participant.id_utilisateur} (${balanceBefore} → ${balanceAfter})`);
-            }
-          }
-        }
-
-        // B. CRITICAL: Refund the CREATOR (they might not have a participant record!)
-        const creatorId = reservation.id_utilisateur;
-        const creatorAlreadyRefunded = refundResults.some(r => Number(r.userId) === Number(creatorId));
-
-        // Skip if creator is the one making the private match
-        if (Number(creatorId) !== Number(privateMatchUserId) && !creatorAlreadyRefunded) {
-          console.log(`[Override] 🔍 Checking if creator ${creatorId} needs refund...`);
-
-          // Check if creator paid by finding their debit transaction
-          const creatorDebit = await models.credit_transaction.findOne({
-            where: {
-              id_utilisateur: creatorId,
-              type: `debit:reservation:R${reservation.id}:U${creatorId}:creator`,
-              nombre: { [models.Sequelize.Op.lt]: 0 } // Negative = debit
-            },
-            transaction: t
-          });
-
-          if (creatorDebit) {
-            const refundAmount = Math.abs(Number(creatorDebit.nombre));
-            const creator = await models.utilisateur.findByPk(creatorId, {
-              transaction: t,
-              lock: t.LOCK.UPDATE
-            });
-
-            if (creator) {
-              const balanceBefore = Number(creator.credit_balance ?? 0);
-              const balanceAfter = balanceBefore + refundAmount;
-
-              await creator.update({
-                credit_balance: balanceAfter
+              await models.credit_transaction.create({
+                id_utilisateur: userId,
+                nombre: refundAmount,
+                type: `refund:valid_match_override:R${reservation.id}:U${userId}`,
+                date_creation: new Date()
               }, { transaction: t });
 
-              await logCreditTransaction(
-                creatorId,
-                refundAmount,
-                `refund:override:R${reservation.id}:U${creatorId}`,
-                t
-              );
-
-              refundResults.push({
-                userId: creatorId,
-                amount: refundAmount,
-                success: true,
-                balanceBefore,
-                balanceAfter
-              });
-
-              console.log(`[Override] ✅ Refunded ${refundAmount} to CREATOR ${creatorId} (${balanceBefore} → ${balanceAfter})`);
+              console.log(`[ValidMatch] ✅ Refunded ${refundAmount} to user ${userId} (${balanceBefore} → ${balanceAfter})`);
             }
           } else {
-            console.log(`[Override] ℹ️  Creator ${creatorId} didn't pay with credit - no refund needed`);
+            console.log(`[ValidMatch] ℹ️  User ${userId} didn't pay - no refund needed`);
           }
         }
 
-        // STEP 2: Verify all refunds completed successfully
-        console.log(`[Override] ✅ STEP 2: Refund verification complete - ${refundResults.length} users refunded`);
-        refundResults.forEach(r => {
-          console.log(`[Override]    User ${r.userId}: +${r.amount} (${r.balanceBefore} → ${r.balanceAfter})`);
-        });
-
-        // 4. Remove all participants
+        // 5. Delete all participants
         if (participants.length > 0) {
           await models.participant.destroy({
             where: { id_reservation: reservation.id },
@@ -242,22 +227,30 @@ export default function ReservationService(models) {
           });
         }
 
-        // 5. Add notification (only if not the private match creator)
-        try {
-          if (Number(reservation.id_utilisateur) !== Number(privateMatchUserId)) {
-            await addNotification(reservation.id_utilisateur, {
-              type: 'reservation_cancelled',
-              title: 'Réservation annulée',
-              message: `Votre réservation du ${date} a été annulée car un autre joueur a confirmé le créneau avec un paiement immédiat (Crédits).`,
-              data: { reservationId: reservation.id }
-            });
+        // 6. Send notifications (skip creator of new valid match)
+        for (const userId of usersToRefund) {
+          if (Number(userId) !== Number(creatorUserId)) {
+            try {
+              await addNotification(userId, {
+                type: 'reservation_cancelled',
+                title: 'Réservation annulée',
+                message: `Votre réservation du ${date} a été annulée car un autre match a été confirmé pour ce créneau.`,
+                data: {
+                  cancelledReservationId: reservation.id,
+                  newReservationId: newValidReservationId
+                }
+              });
+            } catch (err) {
+              console.warn('[ValidMatch] Failed to send notification:', err);
+            }
           }
-        } catch (notificationError) {
-          console.warn('[Override] Failed to add notification:', notificationError);
         }
       }
+
+      console.log(`[ValidMatch] ✅ Successfully cancelled ${reservationsToCancel.length} reservation(s)`);
+
     } catch (error) {
-      console.error('[Override] Error during override process:', error);
+      console.error('[ValidMatch] Error during cancellation:', error);
       throw error;
     }
   };
@@ -597,7 +590,29 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 10: Update slot availability
+      // STEP 10: Cancel competing reservations if creating a valid match
+      // ══════════════════════════════════════════════════════════════════════
+
+      // Check if we're creating a VALID match that should cancel others
+      const isPrivateWithCredit = (typerVal === 1) && (creatorPayType === 1);
+
+      if (isPrivateWithCredit) {
+        // Private match with credit payment → etat will be 1 (valid immediately)
+        // Cancel ALL other reservations for this slot+date
+        console.log('[ReservationService] Creating VALID private match → Cancelling all other reservations');
+
+        await handleValidMatchCreated(
+          data.id_plage_horaire,
+          data.date,
+          reservation.id,
+          data.id_utilisateur,
+          t,
+          models
+        );
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
+      // STEP 11: Update slot availability
       // ══════════════════════════════════════════════════════════════════════
 
       // 🔍 DIAGNOSTIC LOGGING
@@ -627,7 +642,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 11: Create participant record for creator
+      // STEP 12: Create participant record for creator
       // ══════════════════════════════════════════════════════════════════════
       await models.participant.create({
         id_reservation: reservation.id,

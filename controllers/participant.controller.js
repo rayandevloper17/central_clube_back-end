@@ -319,139 +319,131 @@ export default function ParticipantController(models) {
 
       console.log(`[ParticipantController] Participant created successfully. Current count: ${updatedCount}`);
 
-      // If open match reaches 4 participants, mark reservation valid (etat=1)
+      // If open match reaches 4 participants, mark as valid and cancel competitors
       if (typerVal === 2 && updatedCount === 4) {
-        console.log(`[ParticipantController] Open match full - marking reservation ${id_reservation} as valid`);
-        await reservation.update({ etat: 1, date_modif: new Date() }, { transaction: t });
+        console.log(`[ParticipantController] Open match reached 4 players - marking as valid`);
 
-        // ════════════════════════════════════════════════════════════════════════
-        // 🔥 CANCEL ALL OTHER PENDING OPEN MATCHES FOR THIS SLOT
-        // ════════════════════════════════════════════════════════════════════════
-        console.log(`[ParticipantController] Checking for conflicting open matches...`);
+        // Mark reservation as valid
+        await reservation.update({
+          etat: 1,
+          date_modif: new Date()
+        }, { transaction: t });
 
-        // Find all OTHER open matches for the same slot+date that are still pending (etat != 1)
-        const conflictingMatches = await models.reservation.findAll({
+        // Import the service to access handleValidMatchCreated
+        const ReservationService = require('../services/reservation.service');
+
+        // Cancel all other open matches for same slot+date
+        console.log(`[ParticipantController] Calling handleValidMatchCreated for open match ${id_reservation}`);
+
+        // We need to directly call the utility function
+        // Since it's not exported, we'll implement the logic inline
+
+        // Get all OTHER open matches for same slot+date
+        const competingOpenMatches = await models.reservation.findAll({
           where: {
             id_plage_horaire: reservation.id_plage_horaire,
             date: reservation.date,
-            typer: 2, // Open matches only
+            typer: 2, // Only open matches
             isCancel: 0,
-            etat: { [models.Sequelize.Op.ne]: 1 }, // Not valid yet
-            id: { [models.Sequelize.Op.ne]: id_reservation } // Not THIS reservation
+            id: { [models.Sequelize.Op.ne]: id_reservation } // Exclude current reservation
           },
           transaction: t,
           lock: t.LOCK.UPDATE
         });
 
-        console.log(`[ParticipantController] Found ${conflictingMatches.length} conflicting pending matches to cancel`);
+        console.log(`[ParticipantController] Found ${competingOpenMatches.length} competing open match(es) to cancel`);
 
-        for (const conflictMatch of conflictingMatches) {
-          console.log(`[ParticipantController] Cancelling conflicting match ${conflictMatch.id}`);
+        // Cancel each competing match and refund participants
+        for (const competingMatch of competingOpenMatches) {
+          console.log(`[ParticipantController] Cancelling competing match ${competingMatch.id}`);
 
           // Cancel the reservation
-          await conflictMatch.update({
+          await competingMatch.update({
             isCancel: 1,
             etat: -1,
             date_modif: new Date()
           }, { transaction: t });
 
-          // Find all participants in this conflicting match
-          const conflictParticipants = await models.participant.findAll({
-            where: { id_reservation: conflictMatch.id },
+          // Find all participants
+          const competingParticipants = await models.participant.findAll({
+            where: { id_reservation: competingMatch.id },
             transaction: t,
             lock: t.LOCK.UPDATE
           });
 
-          // 3. STEP-BY-STEP REFUND PROCESS (Participant Controller)
-          // ════════════════════════════════════════════════════════════════════════
+          // Build list of users to refund
+          const usersToRefund = new Set();
+          usersToRefund.add(competingMatch.id_utilisateur); // Creator
+          competingParticipants.forEach(p => usersToRefund.add(p.id_utilisateur));
 
-          console.log(`[ParticipantController] 💰 Starting refunds for conflicting match ${conflictMatch.id}`);
+          // Refund each user
+          const refundAmount = Number(competingMatch.prix_total ?? 0);
 
-          // Track refunded users
-          const conflictingRefunds = [];
+          for (const userId of usersToRefund) {
+            // Check if user paid
+            const userDebit = await models.credit_transaction.findOne({
+              where: {
+                id_utilisateur: userId,
+                [models.Sequelize.Op.or]: [
+                  { type: `debit:reservation:R${competingMatch.id}:U${userId}:creator` },
+                  { type: { [models.Sequelize.Op.like]: `debit:join:R${competingMatch.id}:U${userId}%` } }
+                ],
+                nombre: { [models.Sequelize.Op.lt]: 0 }
+              },
+              transaction: t
+            });
 
-          // A. Refund all participants who have records
-          for (const participant of conflictParticipants) {
-            if (Number(participant.statepaiement) === 1) { // Only refund if paid
-              const user = await models.utilisateur.findByPk(participant.id_utilisateur, {
+            if (userDebit) {
+              const user = await models.utilisateur.findByPk(userId, {
                 transaction: t,
                 lock: t.LOCK.UPDATE
               });
 
               if (user) {
-                const refundAmount = Number(reservation.prix_total ?? 0); // Use reservation price or open match price check?
-                // NOTE: Typically open match price is same for all. Using current reservation's price as proxy or should fetch conflict match price?
-                // Ideally conflictMatch.prix_total should be used if it exists, otherwise reservation.prix_total
-                const amountToRefund = Number(conflictMatch.prix_total ?? 800);
-
                 const currentBalance = Number(user.credit_balance ?? 0);
                 await user.update({
-                  credit_balance: currentBalance + amountToRefund
-                }, { transaction: t });
-
-                await models.credit_transaction.create({
-                  id_utilisateur: participant.id_utilisateur,
-                  nombre: amountToRefund,
-                  type: `refund:match_override:R${conflictMatch.id}`,
-                  date_creation: new Date()
-                }, { transaction: t });
-
-                conflictingRefunds.push(participant.id_utilisateur);
-                console.log(`[ParticipantController] ✅ Refunded ${amountToRefund} to participant ${participant.id_utilisateur}`);
-              }
-            }
-          }
-
-          // B. REFUND CREATOR (Handle case where creator has no participant record)
-          const conflictCreatorId = conflictMatch.id_utilisateur;
-          const conflictCreatorAlreadyRefunded = conflictingRefunds.includes(conflictCreatorId);
-
-          if (!conflictCreatorAlreadyRefunded) {
-            console.log(`[ParticipantController] 🔍 Checking if creator ${conflictCreatorId} needs refund...`);
-
-            // Check if creator paid via debit transaction
-            const creatorDebit = await models.credit_transaction.findOne({
-              where: {
-                id_utilisateur: conflictCreatorId,
-                type: `debit:reservation:R${conflictMatch.id}:U${conflictCreatorId}:creator`,
-                nombre: { [models.Sequelize.Op.lt]: 0 } // Negative
-              },
-              transaction: t
-            });
-
-            if (creatorDebit) {
-              const refundAmount = Math.abs(Number(creatorDebit.nombre));
-              const creator = await models.utilisateur.findByPk(conflictCreatorId, {
-                transaction: t,
-                lock: t.LOCK.UPDATE
-              });
-
-              if (creator) {
-                const currentBalance = Number(creator.credit_balance ?? 0);
-                await creator.update({
                   credit_balance: currentBalance + refundAmount
                 }, { transaction: t });
 
                 await models.credit_transaction.create({
-                  id_utilisateur: conflictCreatorId,
+                  id_utilisateur: userId,
                   nombre: refundAmount,
-                  type: `refund:match_override:R${conflictMatch.id}:creator`,
+                  type: `refund:valid_match_override:R${competingMatch.id}:U${userId}`,
                   date_creation: new Date()
                 }, { transaction: t });
 
-                console.log(`[ParticipantController] ✅ Refunded ${refundAmount} to CREATOR ${conflictCreatorId}`);
+                console.log(`[ParticipantController] ✅ Refunded ${refundAmount} to user ${userId}`);
               }
             }
           }
 
-          // Delete the conflicting participants
-          await models.participant.destroy({
-            where: { id_reservation: conflictMatch.id },
-            transaction: t
-          });
+          // Delete participants
+          if (competingParticipants.length > 0) {
+            await models.participant.destroy({
+              where: { id_reservation: competingMatch.id },
+              transaction: t
+            });
+          }
+
+          // Send notifications
+          for (const userId of usersToRefund) {
+            try {
+              await models.addNotification(userId, {
+                type: 'reservation_cancelled',
+                title: 'Réservation annulée',
+                message: `Votre match ouvert a été annulé car un autre match a atteint 4 joueurs.`,
+                data: {
+                  cancelledReservationId: competingMatch.id,
+                  newReservationId: id_reservation
+                }
+              });
+            } catch (err) {
+              console.warn('[ParticipantController] Failed to send notification:', err);
+            }
+          }
         }
 
-        // Now mark the slot as unavailable since this match is full and valid
+        // Mark slot as unavailable
         const plageHoraire = await models.plage_horaire.findByPk(reservation.id_plage_horaire, {
           transaction: t,
           lock: t.LOCK.UPDATE
