@@ -188,14 +188,8 @@ export default function ReservationService(models) {
         usersToRefund.add(reservation.id_utilisateur);
         participants.forEach(p => usersToRefund.add(p.id_utilisateur));
 
-        // 4. Refund each user (EXCEPT the creator of new valid match)
+        // 4. Refund each user who paid
         for (const userId of usersToRefund) {
-          // Skip if this is the user creating the new valid match
-          if (Number(userId) === Number(creatorUserId)) {
-            console.log(`[ValidMatch] ⏭️  Skipping refund for user ${userId} - they created the new valid match`);
-            continue;
-          }
-
           // Check if user paid
           const userDebit = await models.credit_transaction.findOne({
             where: {
@@ -217,6 +211,9 @@ export default function ReservationService(models) {
               userId === reservation.id_utilisateur ? null : userId,
               t
             );
+            console.log(`[ValidMatch] ✅ Refunded ${reservation.prix_total} to user ${userId}`);
+          } else {
+            console.log(`[ValidMatch] ℹ️  User ${userId} didn't pay - no refund needed`);
           }
         }
 
@@ -228,22 +225,20 @@ export default function ReservationService(models) {
           });
         }
 
-        // 6. Send notifications
+        // 6. Send notifications to all affected users
         for (const userId of usersToRefund) {
-          if (Number(userId) !== Number(creatorUserId)) {
-            try {
-              await addNotification(userId, {
-                type: 'reservation_cancelled',
-                title: 'Réservation annulée',
-                message: `Votre réservation du ${date} a été annulée car un autre match a été confirmé.`,
-                data: { 
-                  cancelledReservationId: reservation.id,
-                  newReservationId: newValidReservationId
-                }
-              });
-            } catch (err) {
-              console.warn('[ValidMatch] Failed to send notification:', err);
-            }
+          try {
+            await addNotification(userId, {
+              type: 'reservation_cancelled',
+              title: 'Réservation annulée',
+              message: `Votre réservation du ${date} a été annulée car un autre match a été confirmé.`,
+              data: { 
+                cancelledReservationId: reservation.id,
+                newReservationId: newValidReservationId
+              }
+            });
+          } catch (err) {
+            console.warn('[ValidMatch] Failed to send notification:', err);
           }
         }
       }
