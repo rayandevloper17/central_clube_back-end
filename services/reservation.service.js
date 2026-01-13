@@ -438,22 +438,23 @@ export default function ReservationService(models) {
     // Get capacity (default to 1 if not set)
     const capacity = Number(plage.capacity ?? 1);
 
-    // 🔥 CRITICAL FIX: Lock ALL existing reservations for this slot+date
-    // This prevents race conditions where 2 users see count=0 simultaneously
+    // 🔥 CRITICAL FIX: Lock ONLY VALID reservations for this slot+date
+    // PENDING reservations (etat=0) don't count towards capacity!
     const existingReservations = await models.reservation.findAll({
       where: {
         id_plage_horaire: plageHoraireId,
         date: date,
-        isCancel: 0
+        isCancel: 0,
+        etat: 1  // ← CRITICAL: Only count VALID reservations!
       },
       transaction: t,
-      lock: t.LOCK.UPDATE  // ← THIS IS THE FIX!
+      lock: t.LOCK.UPDATE
     });
 
     const activeReservations = existingReservations.length;
     const available = activeReservations < capacity;
     
-    console.log(`[Capacity Check] Slot ${plageHoraireId} on ${date}: ${activeReservations}/${capacity} - Available: ${available}`);
+    console.log(`[Capacity Check] Slot ${plageHoraireId} on ${date}: ${activeReservations}/${capacity} valid reservations - Available: ${available}`);
     
     return available;
   };
