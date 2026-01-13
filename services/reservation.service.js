@@ -15,7 +15,7 @@ import { Op } from 'sequelize';
  */
 
 export default function ReservationService(models) {
-
+  
   // ════════════════════════════════════════════════════════════════════════════
   // UTILITY: Audit log for credit transactions
   // ════════════════════════════════════════════════════════════════════════════
@@ -49,27 +49,27 @@ export default function ReservationService(models) {
       transaction: t,
       lock: t?.LOCK?.UPDATE,
     });
-
+    
     if (existing) {
       console.log('[RefundService] Duplicate refund prevented for', auditKey);
       return false;
     }
 
-    const user = await models.utilisateur.findByPk(userId, {
-      transaction: t,
-      lock: t?.LOCK?.UPDATE
+    const user = await models.utilisateur.findByPk(userId, { 
+      transaction: t, 
+      lock: t?.LOCK?.UPDATE 
     });
-
+    
     if (!user) {
       console.log(`[RefundService] User ${userId} not found`);
       return false;
     }
-
+    
     const currentBalance = Number(user.credit_balance ?? 0);
     const newBalance = currentBalance + amount;
     await user.update({ credit_balance: newBalance }, { transaction: t });
     await logCreditTransaction(userId, amount, auditKey, t);
-
+    
     console.log(`[RefundService] Refunded user ${userId} amount=${amount} (${currentBalance} -> ${newBalance})`);
     return true;
   };
@@ -77,19 +77,22 @@ export default function ReservationService(models) {
   // ════════════════════════════════════════════════════════════════════════════
   // UTILITY: Cancel pending OPEN matches when a PRIVATE match is created
   // ════════════════════════════════════════════════════════════════════════════
-  const handleOpenMatchOverride = async (plageHoraireId, date, t, models) => {
-    console.log('[Override] PRIVATE match created -> Cancelling pending OPEN matches', { plageHoraireId, date });
-
+  const handleOpenMatchOverride = async (plageHoraireId, date, privateMatchUserId, t, models) => {
+    console.log('[Override] PRIVATE match created -> Cancelling pending OPEN matches', { 
+      plageHoraireId, 
+      date,
+      privateMatchUserId 
+    });
+    
     try {
-      // 🔥 CRITICAL: Only cancel PENDING OPEN matches (typer=2, etat=0)
-      // Do NOT cancel other private matches
+      // Find all active reservations (Private OR Open) that are NOT confirmed (etat != 1)
       const openMatchReservations = await models.reservation.findAll({
         where: {
           id_plage_horaire: plageHoraireId,
           date: date,
-          typer: 2, // Only OPEN matches
+          typer: { [Op.or]: [1, 2] }, // Target BOTH Private (1) and Open (2)
           isCancel: 0,
-          etat: 0 // Only PENDING (not valid yet)
+          etat: { [Op.ne]: 1 } // etat ≠ 1 (invalid/pending reservations)
         },
         transaction: t,
         lock: t.LOCK.UPDATE
@@ -101,7 +104,7 @@ export default function ReservationService(models) {
 
       for (const reservation of openMatchReservations) {
         // 1. Cancel the reservation
-        await reservation.update({
+        await reservation.update({ 
           isCancel: 1,
           etat: -1, // Mark as cancelled
           date_modif: new Date()
@@ -114,79 +117,27 @@ export default function ReservationService(models) {
           lock: t.LOCK.UPDATE
         });
 
-        console.log(`[Override] Found ${participants.length} participants to refund for reservation ${reservation.id}`);
+        // 3. Refund all participants (including the creator)
+        // 🔥 CRITICAL FIX: Do NOT refund the user who created the private match!
+        const usersToRefund = new Set();
+        usersToRefund.add(reservation.id_utilisateur);
+        participants.forEach(participant => usersToRefund.add(participant.id_utilisateur));
 
-        // 3. Refund participants who PAID (statepaiement=1)
-        for (const participant of participants) {
-          if (Number(participant.statepaiement) === 1) {
-            const user = await models.utilisateur.findByPk(participant.id_utilisateur, {
-              transaction: t,
-              lock: t.LOCK.UPDATE
-            });
-
-            if (user) {
-              const refundAmount = Number(reservation.prix_total ?? 0);
-              const currentBalance = Number(user.credit_balance ?? 0);
-              await user.update({
-                credit_balance: currentBalance + refundAmount
-              }, { transaction: t });
-
-              await logCreditTransaction(
-                participant.id_utilisateur,
-                refundAmount,
-                `refund:override:R${reservation.id}:U${participant.id_utilisateur}`,
-                t
-              );
-
-              console.log(`[Override] Refunded ${refundAmount} to participant ${participant.id_utilisateur} (${currentBalance} -> ${currentBalance + refundAmount})`);
-            }
+        // Refund each user EXCEPT the one creating the private match
+        for (const userId of usersToRefund) {
+          // Skip refund if this is the user creating the private match
+          if (Number(userId) === Number(privateMatchUserId)) {
+            console.log(`[Override] ⚠️ Skipping refund for user ${userId} - they created the private match`);
+            continue;
           }
-        }
-
-        // 🔥 CRITICAL FIX: Refund the CREATOR separately
-        // The creator doesn't have a participant record but they PAID when creating the match
-        // We MUST refund them if they paid with credit
-        const creatorId = reservation.id_utilisateur;
-        const creatorAlreadyRefunded = participants.some(p => p.id_utilisateur === creatorId);
-
-        if (!creatorAlreadyRefunded) {
-          console.log(`[Override] Checking if creator ${creatorId} needs refund (no participant record found)`);
-
-          // Check if creator paid by looking for their debit transaction
-          const creatorDebit = await models.credit_transaction.findOne({
-            where: {
-              id_utilisateur: creatorId,
-              type: `debit:reservation:R${reservation.id}:U${creatorId}:creator`,
-              nombre: { [models.Sequelize.Op.lt]: 0 } // Negative = debit
-            },
-            transaction: t
-          });
-
-          if (creatorDebit) {
-            const refundAmount = Math.abs(Number(creatorDebit.nombre)); // Make positive
-            const creator = await models.utilisateur.findByPk(creatorId, {
-              transaction: t,
-              lock: t.LOCK.UPDATE
-            });
-
-            if (creator) {
-              const currentBalance = Number(creator.credit_balance ?? 0);
-              await creator.update({
-                credit_balance: currentBalance + refundAmount
-              }, { transaction: t });
-
-              await logCreditTransaction(
-                creatorId,
-                refundAmount,
-                `refund:override:R${reservation.id}:U${creatorId}`,
-                t
-              );
-
-              console.log(`[Override] ✅ Refunded ${refundAmount} to CREATOR ${creatorId} (${currentBalance} -> ${currentBalance + refundAmount})`);
-            }
-          } else {
-            console.log(`[Override] Creator ${creatorId} didn't pay with credit - no refund needed`);
-          }
+          
+          await refundUserIdempotent(
+            userId, 
+            reservation.prix_total, 
+            reservation.id, 
+            userId === reservation.id_utilisateur ? null : userId,
+            t
+          );
         }
 
         // 4. Remove all participants
@@ -197,14 +148,16 @@ export default function ReservationService(models) {
           });
         }
 
-        // 5. Add notification
+        // 5. Add notification (only if not the private match creator)
         try {
-          await addNotification(reservation.id_utilisateur, {
-            type: 'reservation_cancelled',
-            title: 'Réservation annulée',
-            message: `Votre réservation du ${date} a été annulée car un autre joueur a confirmé le créneau avec un paiement immédiat (Crédits).`,
-            data: { reservationId: reservation.id }
-          });
+          if (Number(reservation.id_utilisateur) !== Number(privateMatchUserId)) {
+            await addNotification(reservation.id_utilisateur, {
+              type: 'reservation_cancelled',
+              title: 'Réservation annulée',
+              message: `Votre réservation du ${date} a été annulée car un autre joueur a confirmé le créneau avec un paiement immédiat (Crédits).`,
+              data: { reservationId: reservation.id }
+            });
+          }
         } catch (notificationError) {
           console.warn('[Override] Failed to add notification:', notificationError);
         }
@@ -217,11 +170,8 @@ export default function ReservationService(models) {
 
   // ════════════════════════════════════════════════════════════════════════════
   // 🔥 FIXED: Check if a slot has available capacity with PROPER LOCKING
-  // 
-  // IMPORTANT: For open matches (typer=2), we allow MULTIPLE pending reservations
-  // to compete. Only when one reaches 4 players does it "win" and others are cancelled.
   // ════════════════════════════════════════════════════════════════════════════
-  const hasAvailableCapacity = async (plageHoraireId, date, t, reservationType = null) => {
+  const hasAvailableCapacity = async (plageHoraireId, date, t) => {
     // Get the plage_horaire to check its capacity
     const plage = await models.plage_horaire.findByPk(plageHoraireId, {
       transaction: t,
@@ -237,43 +187,21 @@ export default function ReservationService(models) {
 
     // 🔥 CRITICAL FIX: Lock ALL existing reservations for this slot+date
     // This prevents race conditions where 2 users see count=0 simultaneously
-    //
-    // COUNTING RULES:
-    // - For OPEN matches (typer=2): Only count valid open matches + private matches
-    // - For PRIVATE matches (typer=1): Only count private matches + valid open matches
-    //   (pending open matches will be cancelled, so don't count them)
-    const whereClause = {
-      id_plage_horaire: plageHoraireId,
-      date: date,
-      isCancel: 0
-    };
-
-    if (reservationType === 2) {
-      // For OPEN match creation: only count already-valid matches or private matches
-      whereClause[models.Sequelize.Op.or] = [
-        { typer: 1 }, // All private matches
-        { typer: 2, etat: 1 } // Only VALID open matches
-      ];
-    } else if (reservationType === 1) {
-      // For PRIVATE match creation: only count private matches + valid open matches
-      // Don't count pending open matches (etat=0) because they will be cancelled
-      whereClause[models.Sequelize.Op.or] = [
-        { typer: 1 }, // All private matches
-        { typer: 2, etat: 1 } // Only VALID open matches (not pending)
-      ];
-    }
-
     const existingReservations = await models.reservation.findAll({
-      where: whereClause,
+      where: {
+        id_plage_horaire: plageHoraireId,
+        date: date,
+        isCancel: 0
+      },
       transaction: t,
-      lock: t.LOCK.UPDATE
+      lock: t.LOCK.UPDATE  // ← THIS IS THE FIX!
     });
 
     const activeReservations = existingReservations.length;
     const available = activeReservations < capacity;
-
-    console.log(`[Capacity Check] Slot ${plageHoraireId} on ${date}: ${activeReservations}/${capacity} (type=${reservationType}) - Available: ${available}`);
-
+    
+    console.log(`[Capacity Check] Slot ${plageHoraireId} on ${date}: ${activeReservations}/${capacity} - Available: ${available}`);
+    
     return available;
   };
 
@@ -284,7 +212,6 @@ export default function ReservationService(models) {
     const t = await models.sequelize.transaction({
       isolationLevel: models.Sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
     });
-
 
     try {
       console.log('[ReservationService] Starting reservation creation', {
@@ -305,9 +232,9 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 2: Lock user row for balance operations
       // ══════════════════════════════════════════════════════════════════════
-      const utilisateur = await models.utilisateur.findByPk(data.id_utilisateur, {
-        transaction: t,
-        lock: t.LOCK.UPDATE
+      const utilisateur = await models.utilisateur.findByPk(data.id_utilisateur, { 
+        transaction: t, 
+        lock: t.LOCK.UPDATE 
       });
       if (!utilisateur) {
         throw new Error("Utilisateur not found");
@@ -316,15 +243,14 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 3: CRITICAL - Lock the requested plage_horaire row
       // ══════════════════════════════════════════════════════════════════════
-      let plage = await models.plage_horaire.findByPk(data.id_plage_horaire, {
-        transaction: t,
+      let plage = await models.plage_horaire.findByPk(data.id_plage_horaire, { 
+        transaction: t, 
         lock: t.LOCK.UPDATE
       });
-
+      
       if (!plage) {
         throw new Error("Plage horaire not found");
       }
-      // 2c4a826..b4472c5  main -> main
 
       console.log('[ReservationService] Acquired lock on plage_horaire', {
         id: plage.id,
@@ -332,19 +258,16 @@ export default function ReservationService(models) {
         capacity: plage.capacity ?? 1
       });
 
-      // Extract and normalize typer value (needed for capacity checks)
-      const typerVal = Number(data?.typer ?? 1);
-
       // ══════════════════════════════════════════════════════════════════════
       // STEP 4: 🔥 FIXED - SMART SLOT REASSIGNMENT (Proper Capacity Handling)
       // ══════════════════════════════════════════════════════════════════════
-
+      
       // Check if the requested slot has available capacity
-      const hasCapacity = await hasAvailableCapacity(plage.id, data.date, t, typerVal);
+      const hasCapacity = await hasAvailableCapacity(plage.id, data.date, t);
 
       if (!hasCapacity) {
         console.log(`[ReservationService] ⚠️ Slot ${plage.id} is at capacity. Searching for siblings...`);
-
+        
         // Extract time parts for comparison (handle both TIME and TIMESTAMP formats)
         const getTimeString = (timeVal) => {
           if (!timeVal) return null;
@@ -353,29 +276,26 @@ export default function ReservationService(models) {
           const d = new Date(timeVal);
           return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
         };
-
+        
         const startTimeStr = getTimeString(plage.start_time);
         const endTimeStr = getTimeString(plage.end_time);
-
-        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${startTimeStr}, end_time=${endTimeStr}, date=${data.date}`);
-
-        // 🔥 CRITICAL FIX: Use raw SQL for reliable time matching + DATE FILTERING
-        // MUST ensure sibling slots are on the SAME DATE as the reservation!
+        
+        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${startTimeStr}, end_time=${endTimeStr}`);
+        
+        // 🔥 FIX: Use raw SQL for reliable time matching
         const siblings = await models.sequelize.query(`
           SELECT * FROM plage_horaire
           WHERE terrain_id = :terrainId
             AND id != :currentId
             AND CAST(start_time AS TIME) = CAST(:startTime AS TIME)
             AND CAST(end_time AS TIME) = CAST(:endTime AS TIME)
-            AND DATE(start_time) = DATE(:reservationDate::timestamp)
           FOR UPDATE
         `, {
           replacements: {
             terrainId: plage.terrain_id,
             currentId: plage.id,
             startTime: startTimeStr,
-            endTime: endTimeStr,
-            reservationDate: data.date  // ← CRITICAL: Filter by reservation date!
+            endTime: endTimeStr
           },
           transaction: t,
           type: models.sequelize.QueryTypes.SELECT
@@ -387,20 +307,20 @@ export default function ReservationService(models) {
 
         // Check each sibling for available capacity
         for (const sibling of siblings) {
-          const siblingHasCapacity = await hasAvailableCapacity(sibling.id, data.date, t, typerVal);
-
+          const siblingHasCapacity = await hasAvailableCapacity(sibling.id, data.date, t);
+          
           console.log(`[ReservationService] 🔍 Checking sibling ${sibling.id}: hasCapacity=${siblingHasCapacity}`);
-
+          
           if (siblingHasCapacity) {
             // Found a slot with available capacity! Switch to it.
             console.log(`[ReservationService] ✅ Switching to sibling slot with capacity: ${sibling.id}`);
-
+            
             // Re-fetch as model instance with lock
             plage = await models.plage_horaire.findByPk(sibling.id, {
               transaction: t,
               lock: t.LOCK.UPDATE
             });
-
+            
             data.id_plage_horaire = sibling.id; // Update payload ID
             freeSiblingFound = true;
             break; // Stop searching
@@ -420,7 +340,7 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 5: Handle conflicts (Credit override for pending reservations)
       // ══════════════════════════════════════════════════════════════════════
-
+      
       // Even if we have capacity, check for conflict scenarios
       const existingReservations = await models.reservation.findAll({
         where: {
@@ -435,11 +355,11 @@ export default function ReservationService(models) {
       if (existingReservations.length > 0) {
         // 1. Check if ANY existing reservation is VALID (etat = 1)
         const validReservation = existingReservations.find(r => Number(r.etat) === 1);
-
+        
         // For capacity > 1, valid reservations can coexist
         const capacity = Number(plage.capacity ?? 1);
         const validCount = existingReservations.filter(r => Number(r.etat) === 1).length;
-
+        
         if (validCount >= capacity) {
           // Slot is fully booked with confirmed reservations
           const error = new Error('Ce créneau est complet avec des réservations confirmées.');
@@ -451,19 +371,14 @@ export default function ReservationService(models) {
         const requestedPayType = Number(data?.typepaiementForCreator ?? data?.typepaiement ?? 1);
         const isSurPlace = requestedPayType === 2; // 2 = Sur place (Pending)
 
-        // 🔥 CRITICAL FIX: Only override for PRIVATE matches (typer=1)
-        // Open matches (typer=2) should NOT cancel other pending matches during creation
-        // They compete and winner is determined when one reaches 4 players
-        if (!isSurPlace && typerVal === 1) {
-          // PRIVATE match with credit payment can override pending reservations
+        if (!isSurPlace) {
+          // Credit payment can override pending reservations
           const pendingReservations = existingReservations.filter(r => Number(r.etat) !== 1);
-
+          
           if (pendingReservations.length > 0) {
-            console.log('[ReservationService] PRIVATE "Credit" match -> Overriding pending reservations.');
-            await handleOpenMatchOverride(data.id_plage_horaire, data.date, t, models);
+            console.log('[ReservationService] "Credit" request -> Overriding pending reservations.');
+            await handleOpenMatchOverride(data.id_plage_horaire, data.date, data.id_utilisateur, t, models);
           }
-        } else if (typerVal === 2) {
-          console.log('[ReservationService] OPEN match -> Allowing to compete with other pending matches.');
         }
       }
 
@@ -471,9 +386,11 @@ export default function ReservationService(models) {
       // STEP 6: Validate and normalize price
       // ══════════════════════════════════════════════════════════════════════
       const plagePrice = Number(plage?.price);
-      const normalizedPrice = Number.isFinite(plagePrice) && plagePrice > 0
-        ? plagePrice
+      const normalizedPrice = Number.isFinite(plagePrice) && plagePrice > 0 
+        ? plagePrice 
         : 1;
+
+      const typerVal = Number(data?.typer ?? 0);
 
       // ══════════════════════════════════════════════════════════════════════
       // STEP 7: Validate rating range for open matches
@@ -485,7 +402,7 @@ export default function ReservationService(models) {
         if (!Number.isFinite(minFloat) || !Number.isFinite(maxFloat)) {
           throw new Error('Rating range (min/max) is required for Match Ouvert');
         }
-
+        
         if (minFloat > maxFloat) {
           throw new Error('Invalid rating range: min must be <= max');
         }
@@ -494,7 +411,7 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 8: Handle payment and balance deduction
       // ══════════════════════════════════════════════════════════════════════
-
+      
       // 🔥 FIX: More robust payment type detection
       const creatorPayType = (() => {
         if (data.typepaiementForCreator !== undefined && data.typepaiementForCreator !== null) {
@@ -505,11 +422,11 @@ export default function ReservationService(models) {
         }
         return 1; // Default to credit
       })();
-
+      
       const etatVal = Number(data?.etat ?? -1);
       const isOnsitePayment = (creatorPayType === 2) || (etatVal === 0);
       const shouldSkipDeduction = (typerVal === 1) && isOnsitePayment;
-
+      
       console.log(`[ReservationService] 💳 Payment detection:`, {
         typepaiementForCreator: data.typepaiementForCreator,
         typepaiement: data.typepaiement,
@@ -526,13 +443,13 @@ export default function ReservationService(models) {
         creatorCharge = normalizedPrice;
 
         const currentBalance = Number(utilisateur.credit_balance ?? 0);
-
+        
         if (!Number.isFinite(currentBalance) || currentBalance < creatorCharge) {
           throw new Error('Insufficient balance');
         }
-
+        
         await utilisateur.update(
-          { credit_balance: currentBalance - creatorCharge },
+          { credit_balance: currentBalance - creatorCharge }, 
           { transaction: t }
         );
       }
@@ -546,7 +463,7 @@ export default function ReservationService(models) {
       try {
         reservation = await models.reservation.create(payload, { transaction: t });
         console.log('[ReservationService] ✅ Created reservation', { id: reservation.id, slotId: plage.id });
-
+        
         // Record the credit_transaction AFTER reservation is created
         if (!shouldSkipDeduction && creatorCharge > 0) {
           await models.credit_transaction.create({
@@ -555,7 +472,7 @@ export default function ReservationService(models) {
             type: `debit:reservation:R${reservation.id}:U${data.id_utilisateur}:creator`,
             date_creation: new Date()
           }, { transaction: t });
-
+          
           // Notification: Credit Deduction
           await addNotification({
             recipient_id: data.id_utilisateur,
@@ -572,11 +489,11 @@ export default function ReservationService(models) {
           type: 'reservation_confirmed',
           message: `Votre réservation pour le ${data.date} a été confirmée avec succès.`
         });
-
+        
       } catch (insertError) {
         // Handle unique constraint violation
-        if (insertError.name === 'SequelizeUniqueConstraintError' ||
-          insertError.parent?.code === '23505') {
+        if (insertError.name === 'SequelizeUniqueConstraintError' || 
+            insertError.parent?.code === '23505') {
           console.log('[ReservationService] Unique constraint violation - slot taken by another user');
           const error = new Error('Ce créneau vient d\'être réservé par un autre joueur. Veuillez rafraîchir et choisir un autre créneau.');
           error.statusCode = 409;
@@ -588,7 +505,7 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 10: Update slot availability
       // ══════════════════════════════════════════════════════════════════════
-
+      
       // 🔍 DIAGNOSTIC LOGGING
       console.log(`[ReservationService] 🔍 Availability check:`, {
         typerVal,
@@ -597,7 +514,7 @@ export default function ReservationService(models) {
         isOnsitePayment,
         shouldMarkUnavailable: typerVal === 1 && !isOnsitePayment
       });
-
+      
       // For PRIVATE matches with CREDIT payment: Mark slot as unavailable immediately
       if (typerVal === 1 && !isOnsitePayment) {
         // Private match + Credit payment → Slot is now taken
@@ -605,8 +522,8 @@ export default function ReservationService(models) {
         console.log(`[ReservationService] 🔒 Slot ${plage.id} marked as unavailable (private + credit)`);
       } else if (typerVal !== 2 && !isOnsitePayment) {
         // For other cases: Check if this slot is now at full capacity
-        const nowAtCapacity = !(await hasAvailableCapacity(plage.id, data.date, t, typerVal));
-
+        const nowAtCapacity = !(await hasAvailableCapacity(plage.id, data.date, t));
+        
         if (nowAtCapacity) {
           await plage.update({ disponible: false }, { transaction: t });
           console.log(`[ReservationService] 🔒 Slot ${plage.id} marked as unavailable (at capacity)`);
@@ -614,9 +531,6 @@ export default function ReservationService(models) {
       } else {
         console.log(`[ReservationService] ℹ️ Slot ${plage.id} kept available (typer=${typerVal}, onsite=${isOnsitePayment})`);
       }
-
-
-
 
       // ══════════════════════════════════════════════════════════════════════
       // STEP 11: Create participant record for creator
@@ -629,9 +543,6 @@ export default function ReservationService(models) {
         typepaiement: shouldSkipDeduction ? 2 : 1,
         team: 0,
       }, { transaction: t });
-
-
-
 
       // ══════════════════════════════════════════════════════════════════════
       // STEP 12: COMMIT - Release all locks
@@ -656,9 +567,9 @@ export default function ReservationService(models) {
       console.error('[ReservationService] Transaction rolled back:', err.message);
 
       if (err.name === 'SequelizeDatabaseError' || err.message?.includes('deadlock')) {
-        const error = new Error('Ce créneau vient d\'être réservé par un autre joueur. Veuillez rafraîchir.');
-        error.statusCode = 409;
-        throw error;
+         const error = new Error('Ce créneau vient d\'être réservé par un autre joueur. Veuillez rafraîchir.');
+         error.statusCode = 409;
+         throw error;
       }
 
       if (err.statusCode) {
@@ -768,7 +679,7 @@ export default function ReservationService(models) {
       ],
       order: [['date', 'ASC']]
     });
-
+    
     return rows.filter((r) => {
       const typerVal = Number.parseInt((r.typer ?? 0).toString());
       const count = Array.isArray(r.participants) ? r.participants.length : 0;
@@ -784,17 +695,17 @@ export default function ReservationService(models) {
   const update = async (id, data) => {
     const reservation = await models.reservation.findByPk(id);
     if (!reservation) throw new Error("Reservation not found");
-
+    
     const isStatusUpdateToValid = data.etat === 'valid' && reservation.etat !== 'valid';
-    const isOpenMatch = reservation.typer === 2;
-
+    const isOpenMatch = reservation.typer === 2; 
+    
     if (isStatusUpdateToValid && isOpenMatch) {
       const plage = await models.plage_horaire.findByPk(reservation.id_plage_horaire);
       if (plage) {
         await plage.update({ disponible: false });
       }
     }
-
+    
     await reservation.update(data);
     return await findById(id);
   };
@@ -811,15 +722,15 @@ export default function ReservationService(models) {
 
   const cancel = async (id, cancellingUserId) => {
     const t = await models.sequelize.transaction();
-
+    
     try {
       console.log(`💰 [CancelService] Starting cancellation for reservation ${id}`);
-
-      const reservation = await models.reservation.findByPk(id, {
-        transaction: t,
-        lock: t.LOCK.UPDATE
+      
+      const reservation = await models.reservation.findByPk(id, { 
+        transaction: t, 
+        lock: t.LOCK.UPDATE 
       });
-
+      
       if (!reservation) {
         throw new Error('Reservation not found');
       }
@@ -842,10 +753,10 @@ export default function ReservationService(models) {
       }
 
       const plage = reservation.id_plage_horaire
-        ? await models.plage_horaire.findByPk(reservation.id_plage_horaire, {
-          transaction: t,
-          lock: t.LOCK.UPDATE
-        })
+        ? await models.plage_horaire.findByPk(reservation.id_plage_horaire, { 
+            transaction: t, 
+            lock: t.LOCK.UPDATE 
+          })
         : null;
 
       const participants = await models.participant.findAll({
@@ -855,7 +766,7 @@ export default function ReservationService(models) {
       });
 
       const creatorParticipant = participants.find(p => Boolean(p.est_createur));
-      const isCancellerCreator = !!creatorParticipant &&
+      const isCancellerCreator = !!creatorParticipant && 
         Number(creatorParticipant.id_utilisateur) === Number(cancellingUserId);
 
       const slotPrice = (() => {
@@ -882,7 +793,7 @@ export default function ReservationService(models) {
         }
 
         await reservation.update({ isCancel: 1, etat: 3, date_modif: new Date() }, { transaction: t });
-
+        
         // Notify others
         for (const p of participants) {
           if (Number(p.id_utilisateur) !== Number(cancellingUserId)) {
@@ -899,8 +810,7 @@ export default function ReservationService(models) {
 
         // 🔥 FIXED: Re-enable slot if it now has capacity
         if (plage) {
-          const reservationTyper = Number(reservation.typer ?? 1);
-          const stillHasCapacity = await hasAvailableCapacity(plage.id, reservation.date, t, reservationTyper);
+          const stillHasCapacity = await hasAvailableCapacity(plage.id, reservation.date, t);
           if (stillHasCapacity) {
             await plage.update({ disponible: true }, { transaction: t });
             console.log(`[CancelService] ✅ Slot ${plage.id} re-enabled (has capacity after cancellation)`);
@@ -918,11 +828,11 @@ export default function ReservationService(models) {
 
         await models.participant.destroy({ where: { id_reservation: id, id_utilisateur: cancellingUserId }, transaction: t });
         await reservation.update({ date_modif: new Date() }, { transaction: t });
-
+        
         // Notify
         for (const p of participants) {
           if (Number(p.id_utilisateur) !== Number(cancellingUserId)) {
-            addNotification({
+             addNotification({
               recipient_id: p.id_utilisateur,
               reservation_id: reservation.id,
               type: 'participant_cancelled',
@@ -947,7 +857,7 @@ export default function ReservationService(models) {
 
   const processStatusRefunds = async () => {
     const t = await models.sequelize.transaction();
-
+    
     try {
       const reservations = await models.reservation.findAll({
         where: { isCancel: 0 },
@@ -963,7 +873,7 @@ export default function ReservationService(models) {
           ]);
           reservation.dataValues.plage_horaire = plageHoraire;
           reservation.dataValues.participants = participants;
-        } catch (e) { }
+        } catch (e) {}
       }
 
       const bySlot = new Map();
