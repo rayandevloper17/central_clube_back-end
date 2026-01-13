@@ -735,28 +735,21 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 10: Cancel competing reservations if creating a valid match
+      // STEP 10: Check if all slots are full and cancel excess pending
       // ══════════════════════════════════════════════════════════════════════
 
-      // Check if we're creating a VALID match that should cancel others
+      // Check if we created a VALID match (private with credit)
       const isPrivateWithCredit = (typerVal === 1) && (creatorPayType === 1);
 
       if (isPrivateWithCredit) {
-        // Private match with credit payment → etat will be 1 (valid immediately)
-        // Cancel other VALID reservations (pending ones stay active)
-        console.log('[ReservationService] Creating VALID private match → Cancelling other VALID reservations');
+        // Private match is valid immediately (etat=1)
+        // Each valid match takes ONE slot only
+        // NO need to cancel other valid matches - they can coexist!
+        
+        console.log('[ReservationService] Created VALID private match → Checking if all slots full');
 
-        await handleValidMatchCreated(
-          data.id_plage_horaire,
-          data.date,
-          reservation.id,
-          data.id_utilisateur,
-          t,
-          models
-        );
-
-        // After creating valid match, check if all slots are now full
-        // If yes, cancel ALL pending reservations
+        // Only check if all slots are now full
+        // If yes, cancel remaining PENDING reservations
         await cancelExcessPendingReservations(
           data.id_plage_horaire,
           data.date,
