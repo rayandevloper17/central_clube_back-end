@@ -1872,7 +1872,7 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // 🔥 CRITICAL: Check if creating a VALID match when all slots are full
       // ══════════════════════════════════════════════════════════════════════
-      // const isPrivateWithCredit = (typerVal === 1) && (creatorPayType === 1);
+      const isPrivateWithCredit = (typerVal === 1) && (creatorPayType === 1);
 
       if (isPrivateWithCredit) {
         // This will be a valid match (etat=1). Check if all sibling slots are taken
@@ -1984,8 +1984,7 @@ export default function ReservationService(models) {
       // STEP 11: Check if all slots are full and cancel excess pending
       // ══════════════════════════════════════════════════════════════════════
 
-      // Check if we created a VALID match (private with credit)
-      const isPrivateWithCredit = (typerVal === 1) && (creatorPayType === 1);
+      // Use the isPrivateWithCredit variable already declared above
 
       if (isPrivateWithCredit) {
         // Private match is valid immediately (etat=1)
