@@ -75,10 +75,11 @@ export default function ReservationService(models) {
   };
 
   // ════════════════════════════════════════════════════════════════════════════
-  // UTILITY: Cancel ALL other reservations when a VALID match is created
+  // UTILITY: Cancel ONLY other VALID matches when a new valid match is created
+  // PENDING matches are NOT cancelled - they compete for remaining slots
   // ════════════════════════════════════════════════════════════════════════════
   const handleValidMatchCreated = async (plageHoraireId, date, newValidReservationId, creatorUserId, t, models) => {
-    console.log('[ValidMatch] Valid match created -> Cancelling ALL other reservations', { 
+    console.log('[ValidMatch] Valid match created -> Cancelling other VALID reservations ONLY', { 
       plageHoraireId, 
       date,
       newValidReservationId,
@@ -140,34 +141,36 @@ export default function ReservationService(models) {
       const siblingSlotIds = allSiblingSlots.map(s => s.id);
       console.log(`[ValidMatch] Found ${siblingSlotIds.length} sibling slot IDs: [${siblingSlotIds.join(', ')}]`);
 
-      // Build where clause to find ALL reservations in ANY of these slots
+      // 🔥 NEW LOGIC: Only cancel other VALID (etat=1) reservations
+      // PENDING (etat=0) reservations stay active and compete for remaining slots
       let whereClause = {
-        id_plage_horaire: { [Op.in]: siblingSlotIds }, // ← CRITICAL FIX: Search ALL sibling slots!
+        id_plage_horaire: { [Op.in]: siblingSlotIds },
         date: date,
         isCancel: 0,
+        etat: 1, // ← CRITICAL: Only cancel VALID matches!
         id: { [Op.ne]: newValidReservationId }
       };
 
       if (newReservationType === 1) {
-        // PRIVATE match → Cancel ALL types
-        console.log('[ValidMatch] PRIVATE match created → Cancelling ALL reservation types');
+        // PRIVATE match → Cancel ALL valid types
+        console.log('[ValidMatch] PRIVATE match created → Cancelling other VALID reservation types');
       } else if (newReservationType === 2) {
-        // OPEN match → Cancel only OTHER OPEN matches
-        console.log('[ValidMatch] OPEN match became valid → Cancelling other OPEN matches');
+        // OPEN match → Cancel only other VALID OPEN matches
+        console.log('[ValidMatch] OPEN match became valid → Cancelling other VALID OPEN matches');
         whereClause.typer = 2;
       }
 
-      // Find ALL reservations to cancel (pending AND valid)
+      // Find VALID reservations to cancel (NOT pending ones!)
       const reservationsToCancel = await models.reservation.findAll({
         where: whereClause,
         transaction: t,
         lock: t.LOCK.UPDATE
       });
 
-      console.log(`[ValidMatch] Found ${reservationsToCancel.length} reservation(s) to cancel`);
+      console.log(`[ValidMatch] Found ${reservationsToCancel.length} VALID reservation(s) to cancel (pending matches remain active)`);
 
       for (const reservation of reservationsToCancel) {
-        console.log(`[ValidMatch] Cancelling reservation ${reservation.id} (typer=${reservation.typer}, etat=${reservation.etat}, slot=${reservation.id_plage_horaire})`);
+        console.log(`[ValidMatch] Cancelling VALID reservation ${reservation.id} (typer=${reservation.typer}, etat=${reservation.etat}, slot=${reservation.id_plage_horaire})`);
 
         // 1. Cancel the reservation
         await reservation.update({ 
@@ -243,9 +246,177 @@ export default function ReservationService(models) {
         }
       }
 
-      console.log(`[ValidMatch] ✅ Successfully cancelled ${reservationsToCancel.length} reservation(s)`);
+      console.log(`[ValidMatch] ✅ Successfully cancelled ${reservationsToCancel.length} VALID reservation(s). Pending reservations remain active.`);
     } catch (error) {
       console.error('[ValidMatch] Error during cancellation:', error);
+      throw error;
+    }
+  };
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // UTILITY: Cancel excess PENDING reservations when all slots are VALID
+  // ════════════════════════════════════════════════════════════════════════════
+  const cancelExcessPendingReservations = async (plageHoraireId, date, t, models) => {
+    console.log('[ExcessCancel] Checking for excess pending reservations', {
+      plageHoraireId,
+      date
+    });
+
+    try {
+      // Get the plage to find sibling slots
+      const plage = await models.plage_horaire.findByPk(plageHoraireId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
+
+      if (!plage) {
+        console.log('[ExcessCancel] Plage horaire not found');
+        return;
+      }
+
+      // Get time for comparison
+      const getTimeString = (timeVal) => {
+        if (!timeVal) return null;
+        if (typeof timeVal === 'string') return timeVal;
+        const d = new Date(timeVal);
+        return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+      };
+
+      const startTimeStr = getTimeString(plage.start_time);
+      const endTimeStr = getTimeString(plage.end_time);
+
+      // Find ALL sibling slots
+      const allSiblingSlots = await models.sequelize.query(`
+        SELECT id FROM plage_horaire
+        WHERE terrain_id = :terrainId
+          AND CAST(start_time AS TIME) = CAST(:startTime AS TIME)
+          AND CAST(end_time AS TIME) = CAST(:endTime AS TIME)
+      `, {
+        replacements: {
+          terrainId: plage.terrain_id,
+          startTime: startTimeStr,
+          endTime: endTimeStr
+        },
+        transaction: t,
+        type: models.sequelize.QueryTypes.SELECT
+      });
+
+      const siblingSlotIds = allSiblingSlots.map(s => s.id);
+      const totalCapacity = siblingSlotIds.length;
+
+      console.log(`[ExcessCancel] Total capacity: ${totalCapacity} slots`);
+
+      // Count VALID reservations
+      const validReservations = await models.reservation.count({
+        where: {
+          id_plage_horaire: { [Op.in]: siblingSlotIds },
+          date: date,
+          isCancel: 0,
+          etat: 1 // Valid matches
+        },
+        transaction: t
+      });
+
+      console.log(`[ExcessCancel] Valid reservations: ${validReservations}/${totalCapacity}`);
+
+      // If all slots are full with valid matches, cancel ALL pending ones
+      if (validReservations >= totalCapacity) {
+        console.log('[ExcessCancel] All slots are full → Cancelling ALL pending reservations');
+
+        // Find ALL pending reservations for this time
+        const pendingReservations = await models.reservation.findAll({
+          where: {
+            id_plage_horaire: { [Op.in]: siblingSlotIds },
+            date: date,
+            isCancel: 0,
+            etat: 0 // Pending only
+          },
+          transaction: t,
+          lock: t.LOCK.UPDATE
+        });
+
+        console.log(`[ExcessCancel] Found ${pendingReservations.length} pending reservation(s) to cancel`);
+
+        for (const reservation of pendingReservations) {
+          console.log(`[ExcessCancel] Cancelling pending reservation ${reservation.id}`);
+
+          // 1. Cancel the reservation
+          await reservation.update({
+            isCancel: 1,
+            etat: -1,
+            date_modif: new Date()
+          }, { transaction: t });
+
+          // 2. Find all participants
+          const participants = await models.participant.findAll({
+            where: { id_reservation: reservation.id },
+            transaction: t,
+            lock: t.LOCK.UPDATE
+          });
+
+          // 3. Build list of users to refund
+          const usersToRefund = new Set();
+          usersToRefund.add(reservation.id_utilisateur);
+          participants.forEach(p => usersToRefund.add(p.id_utilisateur));
+
+          // 4. Refund each user who paid
+          for (const userId of usersToRefund) {
+            const userDebit = await models.credit_transaction.findOne({
+              where: {
+                id_utilisateur: userId,
+                [Op.or]: [
+                  { type: `debit:reservation:R${reservation.id}:U${userId}:creator` },
+                  { type: { [Op.like]: `debit:join:R${reservation.id}:U${userId}%` } }
+                ],
+                nombre: { [Op.lt]: 0 }
+              },
+              transaction: t
+            });
+
+            if (userDebit) {
+              await refundUserIdempotent(
+                userId,
+                reservation.prix_total,
+                reservation.id,
+                userId === reservation.id_utilisateur ? null : userId,
+                t
+              );
+              console.log(`[ExcessCancel] ✅ Refunded ${reservation.prix_total} to user ${userId}`);
+            }
+          }
+
+          // 5. Remove all participants
+          if (participants.length > 0) {
+            await models.participant.destroy({
+              where: { id_reservation: reservation.id },
+              transaction: t
+            });
+          }
+
+          // 6. Send notifications
+          for (const userId of usersToRefund) {
+            try {
+              await addNotification(userId, {
+                type: 'reservation_cancelled',
+                title: 'Réservation annulée',
+                message: `Votre réservation du ${date} a été annulée car tous les créneaux sont maintenant complets.`,
+                data: {
+                  cancelledReservationId: reservation.id,
+                  reason: 'all_slots_full'
+                }
+              });
+            } catch (err) {
+              console.warn('[ExcessCancel] Failed to send notification:', err);
+            }
+          }
+        }
+
+        console.log(`[ExcessCancel] ✅ Successfully cancelled ${pendingReservations.length} pending reservation(s)`);
+      } else {
+        console.log(`[ExcessCancel] Slots not full yet (${validReservations}/${totalCapacity}) - pending reservations remain active`);
+      }
+    } catch (error) {
+      console.error('[ExcessCancel] Error during excess cancellation:', error);
       throw error;
     }
   };
@@ -571,14 +742,23 @@ export default function ReservationService(models) {
 
       if (isPrivateWithCredit) {
         // Private match with credit payment → etat will be 1 (valid immediately)
-        // Cancel ALL other reservations for this slot+date
-        console.log('[ReservationService] Creating VALID private match → Cancelling all other reservations');
+        // Cancel other VALID reservations (pending ones stay active)
+        console.log('[ReservationService] Creating VALID private match → Cancelling other VALID reservations');
 
         await handleValidMatchCreated(
           data.id_plage_horaire,
           data.date,
           reservation.id,
           data.id_utilisateur,
+          t,
+          models
+        );
+
+        // After creating valid match, check if all slots are now full
+        // If yes, cancel ALL pending reservations
+        await cancelExcessPendingReservations(
+          data.id_plage_horaire,
+          data.date,
           t,
           models
         );
