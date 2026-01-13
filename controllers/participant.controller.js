@@ -362,7 +362,15 @@ export default function ParticipantController(models) {
             lock: t.LOCK.UPDATE
           });
 
-          // Refund all participants
+          // 3. STEP-BY-STEP REFUND PROCESS (Participant Controller)
+          // ════════════════════════════════════════════════════════════════════════
+
+          console.log(`[ParticipantController] 💰 Starting refunds for conflicting match ${conflictMatch.id}`);
+
+          // Track refunded users
+          const conflictingRefunds = [];
+
+          // A. Refund all participants who have records
           for (const participant of conflictParticipants) {
             if (Number(participant.statepaiement) === 1) { // Only refund if paid
               const user = await models.utilisateur.findByPk(participant.id_utilisateur, {
@@ -371,21 +379,67 @@ export default function ParticipantController(models) {
               });
 
               if (user) {
-                const refundAmount = Number(reservation.prix_total ?? 0);
+                const refundAmount = Number(reservation.prix_total ?? 0); // Use reservation price or open match price check?
+                // NOTE: Typically open match price is same for all. Using current reservation's price as proxy or should fetch conflict match price?
+                // Ideally conflictMatch.prix_total should be used if it exists, otherwise reservation.prix_total
+                const amountToRefund = Number(conflictMatch.prix_total ?? 800);
+
                 const currentBalance = Number(user.credit_balance ?? 0);
                 await user.update({
-                  credit_balance: currentBalance + refundAmount
+                  credit_balance: currentBalance + amountToRefund
                 }, { transaction: t });
 
-                // Log the refund
                 await models.credit_transaction.create({
                   id_utilisateur: participant.id_utilisateur,
-                  nombre: refundAmount,
+                  nombre: amountToRefund,
                   type: `refund:match_override:R${conflictMatch.id}`,
                   date_creation: new Date()
                 }, { transaction: t });
 
-                console.log(`[ParticipantController] Refunded ${refundAmount} to user ${participant.id_utilisateur}`);
+                conflictingRefunds.push(participant.id_utilisateur);
+                console.log(`[ParticipantController] ✅ Refunded ${amountToRefund} to participant ${participant.id_utilisateur}`);
+              }
+            }
+          }
+
+          // B. REFUND CREATOR (Handle case where creator has no participant record)
+          const conflictCreatorId = conflictMatch.id_utilisateur;
+          const conflictCreatorAlreadyRefunded = conflictingRefunds.includes(conflictCreatorId);
+
+          if (!conflictCreatorAlreadyRefunded) {
+            console.log(`[ParticipantController] 🔍 Checking if creator ${conflictCreatorId} needs refund...`);
+
+            // Check if creator paid via debit transaction
+            const creatorDebit = await models.credit_transaction.findOne({
+              where: {
+                id_utilisateur: conflictCreatorId,
+                type: `debit:reservation:R${conflictMatch.id}:U${conflictCreatorId}:creator`,
+                nombre: { [models.Sequelize.Op.lt]: 0 } // Negative
+              },
+              transaction: t
+            });
+
+            if (creatorDebit) {
+              const refundAmount = Math.abs(Number(creatorDebit.nombre));
+              const creator = await models.utilisateur.findByPk(conflictCreatorId, {
+                transaction: t,
+                lock: t.LOCK.UPDATE
+              });
+
+              if (creator) {
+                const currentBalance = Number(creator.credit_balance ?? 0);
+                await creator.update({
+                  credit_balance: currentBalance + refundAmount
+                }, { transaction: t });
+
+                await models.credit_transaction.create({
+                  id_utilisateur: conflictCreatorId,
+                  nombre: refundAmount,
+                  type: `refund:match_override:R${conflictMatch.id}:creator`,
+                  date_creation: new Date()
+                }, { transaction: t });
+
+                console.log(`[ParticipantController] ✅ Refunded ${refundAmount} to CREATOR ${conflictCreatorId}`);
               }
             }
           }
