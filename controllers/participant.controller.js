@@ -345,6 +345,7 @@ export default function ParticipantController(models) {
             date: reservation.date,
             typer: 2, // Only open matches
             isCancel: 0,
+            etat: { [models.Sequelize.Op.ne]: 1 }, // 🔥 CRITICAL: Only PENDING matches
             id: { [models.Sequelize.Op.ne]: id_reservation } // Exclude current reservation
           },
           transaction: t,
