@@ -1181,7 +1181,6 @@
 //   };
 // }
 
-
 import { addNotification } from '../utils/notificationBus.js';
 import { Op } from 'sequelize';
 
@@ -1958,7 +1957,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 11: Update slot availability
+      // STEP 12: Update slot availability
       // ══════════════════════════════════════════════════════════════════════
       
       // 🔍 DIAGNOSTIC LOGGING
@@ -1988,7 +1987,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 12: Create participant record for creator
+      // STEP 13: Create participant record for creator
       // ══════════════════════════════════════════════════════════════════════
       await models.participant.create({
         id_reservation: reservation.id,
@@ -2000,7 +1999,7 @@ export default function ReservationService(models) {
       }, { transaction: t });
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 13: COMMIT - Release all locks
+      // STEP 14: COMMIT - Release all locks
       // ══════════════════════════════════════════════════════════════════════
       await t.commit();
       console.log('[ReservationService] Transaction committed successfully');
