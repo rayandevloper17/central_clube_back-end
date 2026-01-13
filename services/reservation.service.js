@@ -85,15 +85,14 @@ export default function ReservationService(models) {
     });
 
     try {
-      // 🔥 CRITICAL: Only cancel PENDING OPEN matches (typer=2, etat=0)
-      // Do NOT cancel other private matches or already valid matches
+      // Find all active reservations (Private OR Open) that are NOT confirmed (etat != 1)
       const openMatchReservations = await models.reservation.findAll({
         where: {
           id_plage_horaire: plageHoraireId,
           date: date,
-          typer: 2, // Only OPEN matches
+          typer: { [Op.or]: [1, 2] }, // Target BOTH Private (1) and Open (2)
           isCancel: 0,
-          etat: 0 // Only PENDING (not valid yet)
+          etat: { [Op.ne]: 1 } // etat ≠ 1 (invalid/pending reservations)
         },
         transaction: t,
         lock: t.LOCK.UPDATE
@@ -118,125 +117,28 @@ export default function ReservationService(models) {
           lock: t.LOCK.UPDATE
         });
 
-        // 3. STEP-BY-STEP REFUND PROCESS (as requested by user)
-        // ═══════════════════════════════════════════════════════════════════════
-        // STEP 1: Refund all participants who PAID
-        // STEP 2: Verify refunds completed
-        // STEP 3: THEN the private match charge happens (in caller)
-        // ═══════════════════════════════════════════════════════════════════════
+        // 3. Refund all participants (including the creator)
+        // 🔥 CRITICAL FIX: Do NOT refund the user who created the private match!
+        const usersToRefund = new Set();
+        usersToRefund.add(reservation.id_utilisateur);
+        participants.forEach(participant => usersToRefund.add(participant.id_utilisateur));
 
-        console.log(`[Override] � STEP 1: Starting refunds for reservation ${reservation.id}`);
-
-        // Track who needs refunds and who was refunded
-        const refundResults = [];
-
-        // A. Refund all participants who have participant records
-        for (const participant of participants) {
-          // Skip if they're creating the private match (they'll pay instead)
-          if (Number(participant.id_utilisateur) === Number(privateMatchUserId)) {
-            console.log(`[Override] ⏭️  Skipping participant ${participant.id_utilisateur} - creating private match`);
+        // Refund each user EXCEPT the one creating the private match
+        for (const userId of usersToRefund) {
+          // Skip refund if this is the user creating the private match
+          if (Number(userId) === Number(privateMatchUserId)) {
+            console.log(`[Override] ⚠️ Skipping refund for user ${userId} - they created the private match`);
             continue;
           }
 
-          // Only refund if they paid
-          if (Number(participant.statepaiement) === 1) {
-            const user = await models.utilisateur.findByPk(participant.id_utilisateur, {
-              transaction: t,
-              lock: t.LOCK.UPDATE
-            });
-
-            if (user) {
-              const refundAmount = Number(reservation.prix_total ?? 0);
-              const balanceBefore = Number(user.credit_balance ?? 0);
-              const balanceAfter = balanceBefore + refundAmount;
-
-              await user.update({
-                credit_balance: balanceAfter
-              }, { transaction: t });
-
-              await logCreditTransaction(
-                participant.id_utilisateur,
-                refundAmount,
-                `refund:override:R${reservation.id}:U${participant.id_utilisateur}`,
-                t
-              );
-
-              refundResults.push({
-                userId: participant.id_utilisateur,
-                amount: refundAmount,
-                success: true,
-                balanceBefore,
-                balanceAfter
-              });
-
-              console.log(`[Override] ✅ Refunded ${refundAmount} to participant ${participant.id_utilisateur} (${balanceBefore} → ${balanceAfter})`);
-            }
-          }
+          await refundUserIdempotent(
+            userId,
+            reservation.prix_total,
+            reservation.id,
+            userId === reservation.id_utilisateur ? null : userId,
+            t
+          );
         }
-
-        // B. CRITICAL: Refund the CREATOR (they don't have a participant record!)
-        const creatorId = reservation.id_utilisateur;
-
-        // Skip if creator is the one making the private match
-        if (Number(creatorId) !== Number(privateMatchUserId)) {
-          console.log(`[Override] 🔍 Checking if creator ${creatorId} needs refund...`);
-
-          // Check if creator paid by finding their debit transaction
-          const creatorDebit = await models.credit_transaction.findOne({
-            where: {
-              id_utilisateur: creatorId,
-              type: `debit:reservation:R${reservation.id}:U${creatorId}:creator`,
-              nombre: { [models.Sequelize.Op.lt]: 0 } // Negative = debit
-            },
-            transaction: t
-          });
-
-          if (creatorDebit) {
-            const refundAmount = Math.abs(Number(creatorDebit.nombre));
-            const creator = await models.utilisateur.findByPk(creatorId, {
-              transaction: t,
-              lock: t.LOCK.UPDATE
-            });
-
-            if (creator) {
-              const balanceBefore = Number(creator.credit_balance ?? 0);
-              const balanceAfter = balanceBefore + refundAmount;
-
-              await creator.update({
-                credit_balance: balanceAfter
-              }, { transaction: t });
-
-              await logCreditTransaction(
-                creatorId,
-                refundAmount,
-                `refund:override:R${reservation.id}:U${creatorId}`,
-                t
-              );
-
-              refundResults.push({
-                userId: creatorId,
-                amount: refundAmount,
-                success: true,
-                balanceBefore,
-                balanceAfter
-              });
-
-              console.log(`[Override] ✅ Refunded ${refundAmount} to CREATOR ${creatorId} (${balanceBefore} → ${balanceAfter})`);
-            }
-          } else {
-            console.log(`[Override] ℹ️  Creator ${creatorId} didn't pay with credit - no refund needed`);
-          }
-        } else {
-          console.log(`[Override] ⏭️  Skipping creator ${creatorId} - they're creating the private match`);
-        }
-
-        // STEP 2: Verify all refunds completed successfully
-        console.log(`[Override] ✅ STEP 2: Refund verification complete - ${refundResults.length} users refunded`);
-        refundResults.forEach(r => {
-          console.log(`[Override]    User ${r.userId}: +${r.amount} (${r.balanceBefore} → ${r.balanceAfter})`);
-        });
-
-        // STEP 3 will happen in the caller (private match payment)
 
         // 4. Remove all participants
         if (participants.length > 0) {
