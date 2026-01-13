@@ -99,12 +99,53 @@ export default function ReservationService(models) {
 
       const newReservationType = Number(newReservation.typer);
 
-      // Build where clause
+      // 🔥 CRITICAL FIX: Get the plage_horaire to find ALL sibling slots
+      const plage = await models.plage_horaire.findByPk(plageHoraireId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
+
+      if (!plage) {
+        console.log('[ValidMatch] Plage horaire not found');
+        return;
+      }
+
+      // Get time for comparison
+      const getTimeString = (timeVal) => {
+        if (!timeVal) return null;
+        if (typeof timeVal === 'string') return timeVal;
+        const d = new Date(timeVal);
+        return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+      };
+
+      const startTimeStr = getTimeString(plage.start_time);
+      const endTimeStr = getTimeString(plage.end_time);
+
+      // Find ALL sibling slots (same terrain, same time)
+      const allSiblingSlots = await models.sequelize.query(`
+        SELECT id FROM plage_horaire
+        WHERE terrain_id = :terrainId
+          AND CAST(start_time AS TIME) = CAST(:startTime AS TIME)
+          AND CAST(end_time AS TIME) = CAST(:endTime AS TIME)
+      `, {
+        replacements: {
+          terrainId: plage.terrain_id,
+          startTime: startTimeStr,
+          endTime: endTimeStr
+        },
+        transaction: t,
+        type: models.sequelize.QueryTypes.SELECT
+      });
+
+      const siblingSlotIds = allSiblingSlots.map(s => s.id);
+      console.log(`[ValidMatch] Found ${siblingSlotIds.length} sibling slot IDs: [${siblingSlotIds.join(', ')}]`);
+
+      // Build where clause to find ALL reservations in ANY of these slots
       let whereClause = {
-        id_plage_horaire: plageHoraireId,
+        id_plage_horaire: { [Op.in]: siblingSlotIds }, // ← CRITICAL FIX: Search ALL sibling slots!
         date: date,
         isCancel: 0,
-        id: { [Op.ne]: newValidReservationId } // Exclude the new valid match
+        id: { [Op.ne]: newValidReservationId }
       };
 
       if (newReservationType === 1) {
@@ -126,7 +167,7 @@ export default function ReservationService(models) {
       console.log(`[ValidMatch] Found ${reservationsToCancel.length} reservation(s) to cancel`);
 
       for (const reservation of reservationsToCancel) {
-        console.log(`[ValidMatch] Cancelling reservation ${reservation.id} (typer=${reservation.typer}, etat=${reservation.etat})`);
+        console.log(`[ValidMatch] Cancelling reservation ${reservation.id} (typer=${reservation.typer}, etat=${reservation.etat}, slot=${reservation.id_plage_horaire})`);
 
         // 1. Cancel the reservation
         await reservation.update({ 
