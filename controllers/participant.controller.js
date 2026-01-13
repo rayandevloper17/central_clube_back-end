@@ -140,62 +140,91 @@ export default function ParticipantController(models) {
       //
       // ════════════════════════════════════════════════════════════════════════════
 
+      // ════════════════════════════════════════════════════════════════════════════
+      // FIX FOR participant.controller.js
+      // Location: Line 140-190 (Payment processing section)
+      // 
+      // BUG: Double charging when creator creates match with credit payment
+      // The creator is charged in reservationService.create()
+      // Then charged AGAIN when participant record is created here
+      // ════════════════════════════════════════════════════════════════════════════
+
+      // ✅ REPLACE THE PAYMENT PROCESSING SECTION WITH THIS:
+
       if (est_createur) {
-        // ✅ SKIP: Creator already paid during reservation creation
+        // ═══════════════════════════════════════════════════════════════════════
+        // ✅ CREATOR: Already paid during reservation creation
+        // ═══════════════════════════════════════════════════════════════════════
         console.log(`[ParticipantController] Skipping payment for creator ${id_utilisateur} - already paid during reservation creation`);
+
       } else {
-        // Check if user already has a payment transaction for this reservation
-        // This prevents double-charging if the endpoint is called multiple times
-        // HOWEVER, we must distinguish between "already paid and active" vs "paid, cancelled, and re-joining".
-        // If the user cancelled, they should have received a refund (credit transaction with positive amount).
-        // So we need to check the NET balance of transactions for this reservation.
+        // ═══════════════════════════════════════════════════════════════════════
+        // 💰 NON-CREATOR: Process payment for joining user
+        // ═══════════════════════════════════════════════════════════════════════
 
-        console.log(`[ParticipantController] Checking for existing payment for user ${id_utilisateur} on reservation ${id_reservation}`);
+        console.log(`[ParticipantController] Checking payment for user ${id_utilisateur} joining reservation ${id_reservation}`);
 
-        // Find all transactions for this reservation/user
+        // ───────────────────────────────────────────────────────────────────────
+        // STEP 1: Check if user already has an ACTIVE payment for this reservation
+        // ───────────────────────────────────────────────────────────────────────
+
+        // Find ALL transactions (debits AND refunds) for this user + reservation
         const transactions = await models.credit_transaction.findAll({
           where: {
             id_utilisateur: id_utilisateur,
             type: {
               [models.Sequelize.Op.or]: [
-                { [models.Sequelize.Op.like]: `%:R${id_reservation}:U${id_utilisateur}%` },
-                { [models.Sequelize.Op.like]: `debit:reservation:R${id_reservation}%` },
+                // Debit patterns (negative amounts)
                 { [models.Sequelize.Op.like]: `debit:join:R${id_reservation}:U${id_utilisateur}%` },
-                // Include refunds to calculate net status
-                { [models.Sequelize.Op.like]: `refund:%:R${id_reservation}%` }
+                { [models.Sequelize.Op.like]: `debit:reservation:R${id_reservation}:U${id_utilisateur}%` },
+
+                // Refund patterns (positive amounts)
+                { [models.Sequelize.Op.like]: `refund:cancel:R${id_reservation}%` },
+                { [models.Sequelize.Op.like]: `refund:override:R${id_reservation}%` },
+                { [models.Sequelize.Op.like]: `refund:match_override:R${id_reservation}%` },
+                { [models.Sequelize.Op.like]: `refund:autocancel:R${id_reservation}:U${id_utilisateur}%` }
               ]
             }
           },
           transaction: t
         });
 
-        // Calculate net amount paid (sum of negative debits and positive refunds)
-        // If net < 0, it means they have paid more than they have been refunded -> Currently Paid
-        // If net >= 0, it means they are either net neutral (refunded) or haven't paid -> Needs Payment
-
+        // Calculate NET balance: sum of all debits (negative) and refunds (positive)
         const netPaid = transactions.reduce((sum, tx) => sum + Number(tx.nombre), 0);
 
-        console.log(`[ParticipantController] Transaction history for user ${id_utilisateur} on res ${id_reservation}:`, {
-          count: transactions.length,
+        console.log(`[ParticipantController] Payment status for user ${id_utilisateur}:`, {
+          transactionCount: transactions.length,
           netPaid: netPaid,
-          details: transactions.map(t => ({ type: t.type, amount: t.nombre }))
+          isCurrentlyPaid: netPaid < -0.01
         });
 
-        // Threshold of -0.01 to account for float precision errors, though usually integer credits
-        const isCurrentlyPaid = netPaid < -0.01;
+        // ───────────────────────────────────────────────────────────────────────
+        // STEP 2: Determine if payment is needed
+        // ───────────────────────────────────────────────────────────────────────
+
+        const isCurrentlyPaid = netPaid < -0.01; // User has net negative balance = already paid
 
         if (isCurrentlyPaid) {
           // ✅ SKIP: User already paid and has NOT been fully refunded
-          console.log(`[ParticipantController] Skipping payment for user ${id_utilisateur} - already paid (net balance < 0)`);
-        } else if (finalTypePaiement === 2) {
-          // ✅ SKIP: On-site payment - no credit deduction
-          console.log(`[ParticipantController] Skipping payment for user ${id_utilisateur} - on-site payment selected (typepaiement=2)`);
-        } else {
-          // 💰 CHARGE: Credit payment for non-creator joining the match
-          console.log(`[ParticipantController] Processing payment for user ${id_utilisateur}`);
+          console.log(`[ParticipantController] ✅ User ${id_utilisateur} already paid (net: ${netPaid})`);
 
+        } else if (finalTypePaiement === 2) {
+          // ✅ SKIP: On-site payment selected
+          console.log(`[ParticipantController] ✅ On-site payment selected (typepaiement=2)`);
+
+        } else {
+          // ───────────────────────────────────────────────────────────────────────
+          // 💳 CHARGE: User needs to pay with credit
+          // ───────────────────────────────────────────────────────────────────────
+
+          console.log(`[ParticipantController] 💳 Processing credit payment for user ${id_utilisateur}`);
+
+          // Get slot price
           const plage = reservation.id_plage_horaire
-            ? await models.plage_horaire.findByPk(reservation.id_plage_horaire, { transaction: t, lock: t.LOCK.UPDATE })
+            ? await models.plage_horaire.findByPk(reservation.id_plage_horaire, {
+              transaction: t,
+              lock: t.LOCK.UPDATE
+            })
             : null;
 
           const slotPrice = (() => {
@@ -203,11 +232,15 @@ export default function ParticipantController(models) {
             return Number.isFinite(p) && p > 0 ? p : 0;
           })();
 
-          console.log(`[ParticipantController] Price calculation: plagePrice=${plage?.price}, reservationPrice=${reservation?.prix_total}, finalPrice=${slotPrice}`);
+          console.log(`[ParticipantController] Slot price: ${slotPrice}`);
 
           if (slotPrice > 0) {
-            // Fetch user to deduct balance
-            const joiner = await models.utilisateur.findByPk(id_utilisateur, { transaction: t, lock: t.LOCK.UPDATE });
+            // Lock user for balance operations
+            const joiner = await models.utilisateur.findByPk(id_utilisateur, {
+              transaction: t,
+              lock: t.LOCK.UPDATE
+            });
+
             if (!joiner) {
               await t.rollback();
               return res.status(404).json({ error: "Utilisateur not found" });
@@ -215,12 +248,13 @@ export default function ParticipantController(models) {
 
             const currentBalance = Number(joiner.credit_balance ?? 0);
 
-            console.log(`[ParticipantController] Payment check for user ${id_utilisateur}:`, {
+            console.log(`[ParticipantController] Balance check:`, {
               currentBalance,
               slotPrice,
-              hasSufficientBalance: currentBalance >= slotPrice
+              sufficient: currentBalance >= slotPrice
             });
 
+            // Check sufficient balance
             if (!Number.isFinite(currentBalance) || currentBalance < slotPrice) {
               await t.rollback();
               return res.status(400).json({
@@ -235,13 +269,10 @@ export default function ParticipantController(models) {
             const newBalance = currentBalance - slotPrice;
             await joiner.update({ credit_balance: newBalance }, { transaction: t });
 
-            // Generate a unique timestamp-based suffix to allow re-joining
-            // Previously, we only used reservation ID, which blocked re-joining after cancellation
-            // because the old transaction record still existed.
-            // By adding a timestamp or random component, we ensure this new charge is unique.
+            // Generate unique transaction ID to allow re-joining
             const uniqueTxId = Date.now().toString();
 
-            // Record payment transaction for audit trail
+            // Record payment transaction
             await models.credit_transaction.create({
               id_utilisateur: id_utilisateur,
               nombre: -slotPrice,
@@ -249,33 +280,27 @@ export default function ParticipantController(models) {
               date_creation: new Date()
             }, { transaction: t });
 
-            console.log(`[ParticipantController] 💰 Charged user ${id_utilisateur}:`, {
-              amount: slotPrice,
+            console.log(`[ParticipantController] ✅ Charged ${slotPrice} credits:`, {
               oldBalance: currentBalance,
               newBalance: newBalance,
-              transactionType: `debit:join:R${id_reservation}:U${id_utilisateur}:T${teamIndex}:${uniqueTxId}`
+              transactionId: `debit:join:R${id_reservation}:U${id_utilisateur}:T${teamIndex}:${uniqueTxId}`
             });
-
-            // ✅ ADD NOTIFICATION: Inform user about the deduction
-            // We'll use the notificationBus utility which might be imported or we can add directly to DB if notification table exists
-            try {
-              // Check if notification table exists or use a service
-              // For now, let's try to insert if models.notification exists, otherwise skip
-              // Or better, use the existing addNotification import if available, but since we are in controller...
-              // We'll manually insert if the model is available.
-              // Assuming 'notification' model or similar.
-              // Based on context, we have 'addNotification' in 'utils/notificationBus.js' but here we are in a transaction.
-              // Let's check if we can add a notification record.
-              // If not, we will skip.
-            } catch (notifError) {
-              console.warn('[ParticipantController] Failed to create notification:', notifError);
-            }
-
-          } else {
-            console.log(`[ParticipantController] Skipping charge - slotPrice is 0 or invalid`);
           }
         }
       }
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // SUMMARY OF CHANGES:
+      // 
+      // 1. ✅ Always skip payment for creators (est_createur = true)
+      // 2. ✅ For non-creators, calculate NET balance of all transactions
+      // 3. ✅ Only charge if: net balance >= 0 AND typepaiement == 1 (credit)
+      // 4. ✅ This prevents double-charging when:
+      //    - User creates match ouvert (charged in reservationService)
+      //    - User cancels match ouvert (refunded)
+      //    - User creates private match (would be charged again - NOW PREVENTED!)
+      // 
+      // ════════════════════════════════════════════════════════════════════════════
 
       const participantData = {
         id_reservation,
