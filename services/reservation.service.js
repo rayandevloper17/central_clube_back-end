@@ -1110,22 +1110,38 @@ export default function ReservationService(models) {
             await plage.update({ disponible: true }, { transaction: t });
             console.log(`[CancelService] ✅ Slot ${plage.id} re-enabled (disponible=true)`);
           }
+
+          // ✅ Notify remaining players that match is now pending
+          for (const p of participants) {
+            if (Number(p.id_utilisateur) !== Number(cancellingUserId)) {
+              await addNotification({
+                recipient_id: p.id_utilisateur,
+                reservation_id: reservation.id,
+                submitter_id: cancellingUserId,
+                type: 'match_status_changed',
+                message: `Un joueur a quitté le match. Le match est maintenant en attente (${remainingParticipants}/4 joueurs).`
+              });
+            }
+          }
         } else {
           // Just update modification date
           await reservation.update({ date_modif: new Date() }, { transaction: t });
-        }
 
-        // Notify
-        for (const p of participants) {
-          if (Number(p.id_utilisateur) !== Number(cancellingUserId)) {
-            addNotification({
-              recipient_id: p.id_utilisateur,
-              reservation_id: reservation.id,
-              type: 'participant_cancelled',
-              message: 'Un participant a quitté le match.'
-            });
+          // ✅ Notify remaining players that someone left
+          for (const p of participants) {
+            if (Number(p.id_utilisateur) !== Number(cancellingUserId)) {
+              await addNotification({
+                recipient_id: p.id_utilisateur,
+                reservation_id: reservation.id,
+                submitter_id: cancellingUserId,
+                type: 'participant_left',
+                message: `Un participant a quitté le match (${remainingParticipants}/4 joueurs).`
+              });
+            }
           }
         }
+
+
       }
 
       await t.commit();
