@@ -593,30 +593,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 5: Validate no valid reservations exist
-      // (Cancellation happens AFTER creation in STEP 10)
-      // ══════════════════════════════════════════════════════════════════════
-      
-      const existingReservations = await models.reservation.findAll({
-        where: {
-          id_plage_horaire: plage.id,
-          date: data.date,
-          isCancel: 0,
-          etat: 1 // Only check for VALID reservations
-        },
-        transaction: t,
-        lock: t.LOCK.UPDATE
-      });
-
-      if (existingReservations.length > 0) {
-        // Slot already has a valid reservation
-        const error = new Error('Ce créneau est complet avec une réservation confirmée.');
-        error.statusCode = 409;
-        throw error;
-      }
-
-      // ══════════════════════════════════════════════════════════════════════
-      // STEP 6: Validate and normalize price
+      // STEP 5: Validate and normalize price
       // ══════════════════════════════════════════════════════════════════════
       const plagePrice = Number(plage?.price);
       const normalizedPrice = Number.isFinite(plagePrice) && plagePrice > 0 
@@ -626,7 +603,7 @@ export default function ReservationService(models) {
       const typerVal = Number(data?.typer ?? 0);
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 7: Validate rating range for open matches
+      // STEP 6: Validate rating range for open matches
       // ══════════════════════════════════════════════════════════════════════
       if (typerVal === 2) {
         const minFloat = Number(data?.min);
@@ -642,7 +619,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 8: Handle payment and balance deduction
+      // STEP 7: Handle payment and balance deduction
       // ══════════════════════════════════════════════════════════════════════
       
       // 🔥 FIX: More robust payment type detection
@@ -688,7 +665,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 9: FINAL VALIDATION - Prevent double-booking same slot
+      // STEP 8: FINAL VALIDATION - Prevent double-booking same slot
       // ══════════════════════════════════════════════════════════════════════
       
       // 🔥 CRITICAL: Re-check capacity one more time RIGHT before creating
@@ -703,7 +680,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 10: Create the reservation
+      // STEP 9: Create the reservation
       // ══════════════════════════════════════════════════════════════════════
       const payload = { ...data, prix_total: normalizedPrice };
 
@@ -751,7 +728,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 11: Check if all slots are full and cancel excess pending
+      // STEP 10: Check if all slots are full and cancel excess pending
       // ══════════════════════════════════════════════════════════════════════
 
       // Check if we created a VALID match (private with credit)
@@ -775,7 +752,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 12: Update slot availability
+      // STEP 11: Update slot availability
       // ══════════════════════════════════════════════════════════════════════
       
       // 🔍 DIAGNOSTIC LOGGING
@@ -805,7 +782,7 @@ export default function ReservationService(models) {
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 13: Create participant record for creator
+      // STEP 12: Create participant record for creator
       // ══════════════════════════════════════════════════════════════════════
       await models.participant.create({
         id_reservation: reservation.id,
@@ -817,7 +794,7 @@ export default function ReservationService(models) {
       }, { transaction: t });
 
       // ══════════════════════════════════════════════════════════════════════
-      // STEP 14: COMMIT - Release all locks
+      // STEP 13: COMMIT - Release all locks
       // ══════════════════════════════════════════════════════════════════════
       await t.commit();
       console.log('[ReservationService] Transaction committed successfully');
