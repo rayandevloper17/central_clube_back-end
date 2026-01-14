@@ -111,28 +111,28 @@ export default function ReservationService(models) {
         return;
       }
 
-      // Get time for comparison
-      const getTimeString = (timeVal) => {
+      // Get timestamp for comparison
+      const getFullTimestamp = (timeVal) => {
         if (!timeVal) return null;
         if (typeof timeVal === 'string') return timeVal;
         const d = new Date(timeVal);
-        return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+        return d.toISOString();
       };
 
-      const startTimeStr = getTimeString(plage.start_time);
-      const endTimeStr = getTimeString(plage.end_time);
+      const startTimestamp = getFullTimestamp(plage.start_time);
+      const endTimestamp = getFullTimestamp(plage.end_time);
 
-      // Find ALL sibling slots (same terrain, same time)
+      // Find ALL sibling slots (same terrain, same FULL timestamp)
       const allSiblingSlots = await models.sequelize.query(`
         SELECT id FROM plage_horaire
         WHERE terrain_id = :terrainId
-          AND CAST(start_time AS TIME) = CAST(:startTime AS TIME)
-          AND CAST(end_time AS TIME) = CAST(:endTime AS TIME)
+          AND start_time = :startTime
+          AND end_time = :endTime
       `, {
         replacements: {
           terrainId: plage.terrain_id,
-          startTime: startTimeStr,
-          endTime: endTimeStr
+          startTime: startTimestamp,
+          endTime: endTimestamp
         },
         transaction: t,
         type: models.sequelize.QueryTypes.SELECT
@@ -274,28 +274,28 @@ export default function ReservationService(models) {
         return;
       }
 
-      // Get time for comparison
-      const getTimeString = (timeVal) => {
+      // Get timestamp for comparison
+      const getFullTimestamp = (timeVal) => {
         if (!timeVal) return null;
         if (typeof timeVal === 'string') return timeVal;
         const d = new Date(timeVal);
-        return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+        return d.toISOString();
       };
 
-      const startTimeStr = getTimeString(plage.start_time);
-      const endTimeStr = getTimeString(plage.end_time);
+      const startTimestamp = getFullTimestamp(plage.start_time);
+      const endTimestamp = getFullTimestamp(plage.end_time);
 
-      // Find ALL sibling slots
+      // Find ALL sibling slots (same terrain, same FULL timestamp)
       const allSiblingSlots = await models.sequelize.query(`
         SELECT id FROM plage_horaire
         WHERE terrain_id = :terrainId
-          AND CAST(start_time AS TIME) = CAST(:startTime AS TIME)
-          AND CAST(end_time AS TIME) = CAST(:endTime AS TIME)
+          AND start_time = :startTime
+          AND end_time = :endTime
       `, {
         replacements: {
           terrainId: plage.terrain_id,
-          startTime: startTimeStr,
-          endTime: endTimeStr
+          startTime: startTimestamp,
+          endTime: endTimestamp
         },
         transaction: t,
         type: models.sequelize.QueryTypes.SELECT
@@ -522,34 +522,35 @@ export default function ReservationService(models) {
       if (!hasCapacity) {
         console.log(`[ReservationService] ⚠️ Slot ${plage.id} is at capacity. Searching for siblings...`);
         
-        // Extract time parts for comparison (handle both TIME and TIMESTAMP formats)
-        const getTimeString = (timeVal) => {
+        // Extract FULL timestamp for comparison (including date!)
+        const getFullTimestamp = (timeVal) => {
           if (!timeVal) return null;
+          // Return as-is if already a string
           if (typeof timeVal === 'string') return timeVal;
-          // If it's a Date object, extract HH:MM:SS
+          // If it's a Date object, convert to ISO string
           const d = new Date(timeVal);
-          return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+          return d.toISOString();
         };
         
-        const startTimeStr = getTimeString(plage.start_time);
-        const endTimeStr = getTimeString(plage.end_time);
+        const startTimestamp = getFullTimestamp(plage.start_time);
+        const endTimestamp = getFullTimestamp(plage.end_time);
         
-        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${startTimeStr}, end_time=${endTimeStr}`);
+        console.log(`[ReservationService] 🔍 Looking for: terrain_id=${plage.terrain_id}, start_time=${startTimestamp}, end_time=${endTimestamp}`);
         
-        // 🔥 FIX: Use raw SQL for reliable time matching
+        // 🔥 FIX: Match FULL timestamp (date + time), not just time!
         const siblings = await models.sequelize.query(`
           SELECT * FROM plage_horaire
           WHERE terrain_id = :terrainId
             AND id != :currentId
-            AND CAST(start_time AS TIME) = CAST(:startTime AS TIME)
-            AND CAST(end_time AS TIME) = CAST(:endTime AS TIME)
+            AND start_time = :startTime
+            AND end_time = :endTime
           FOR UPDATE
         `, {
           replacements: {
             terrainId: plage.terrain_id,
             currentId: plage.id,
-            startTime: startTimeStr,
-            endTime: endTimeStr
+            startTime: startTimestamp,
+            endTime: endTimestamp
           },
           transaction: t,
           type: models.sequelize.QueryTypes.SELECT
