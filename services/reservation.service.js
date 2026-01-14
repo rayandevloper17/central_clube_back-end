@@ -719,106 +719,22 @@ export default function ReservationService(models) {
         // Handle unique constraint violation
         if (insertError.name === 'SequelizeUniqueConstraintError' || 
             insertError.parent?.code === '23505') {
+          console.log('[ReservationService] ❌ Unique constraint violation detected!');
+          console.log('[ReservationService] This indicates a database constraint issue.');
+          console.log('[ReservationService] Please run FIX_DATABASE_CONSTRAINT.sql to fix this.');
           
-          console.log('[ReservationService] ⚠️ Unique constraint violation on slot', plage.id);
-          console.log('[ReservationService] This slot may have a cancelled reservation. Trying sibling slots...');
-          
-          // Get sibling slots again
-          const getFullTimestamp = (timeVal) => {
-            if (!timeVal) return null;
-            if (typeof timeVal === 'string') return timeVal;
-            const d = new Date(timeVal);
-            return d.toISOString();
-          };
-          
-          const startTimestamp = getFullTimestamp(plage.start_time);
-          const endTimestamp = getFullTimestamp(plage.end_time);
-          
-          const siblings = await models.sequelize.query(`
-            SELECT * FROM plage_horaire
-            WHERE terrain_id = :terrainId
-              AND id != :currentId
-              AND start_time = :startTime
-              AND end_time = :endTime
-            FOR UPDATE
-          `, {
-            replacements: {
-              terrainId: plage.terrain_id,
-              currentId: plage.id,
-              startTime: startTimestamp,
-              endTime: endTimestamp
-            },
-            transaction: t,
-            type: models.sequelize.QueryTypes.SELECT
-          });
-          
-          console.log(`[ReservationService] Found ${siblings.length} sibling slots to try`);
-          
-          // Try each sibling
-          let created = false;
-          for (const sibling of siblings) {
-            try {
-              // Update payload with new slot ID
-              const siblingPayload = { ...payload, id_plage_horaire: sibling.id };
-              
-              reservation = await models.reservation.create(siblingPayload, { transaction: t });
-              console.log(`[ReservationService] ✅ Created reservation in sibling slot ${sibling.id}`);
-              
-              // Update plage reference
-              plage = await models.plage_horaire.findByPk(sibling.id, {
-                transaction: t,
-                lock: t.LOCK.UPDATE
-              });
-              
-              data.id_plage_horaire = sibling.id;
-              
-              // Record credit transaction
-              if (!shouldSkipDeduction && creatorCharge > 0) {
-                await models.credit_transaction.create({
-                  id_utilisateur: data.id_utilisateur,
-                  nombre: -creatorCharge,
-                  type: `debit:reservation:R${reservation.id}:U${data.id_utilisateur}:creator`,
-                  date_creation: new Date()
-                }, { transaction: t });
-                
-                await addNotification({
-                  recipient_id: data.id_utilisateur,
-                  reservation_id: reservation.id,
-                  type: 'credit_deduction',
-                  message: `Votre réservation a été confirmée. ${creatorCharge} crédits ont été débités de votre compte.`
-                });
-              }
-              
-              await addNotification({
-                recipient_id: data.id_utilisateur,
-                reservation_id: reservation.id,
-                type: 'reservation_confirmed',
-                message: `Votre réservation pour le ${data.date} a été confirmée avec succès.`
-              });
-              
-              created = true;
-              break;
-            } catch (siblingError) {
-              // This sibling also failed, try next one
-              console.log(`[ReservationService] Sibling slot ${sibling.id} also failed, trying next...`);
-              continue;
-            }
-          }
-          
-          if (!created) {
-            console.log('[ReservationService] All slots have constraint violations');
-            const error = new Error('Tous les créneaux pour cette heure sont complets. Veuillez choisir une autre heure.');
-            error.statusCode = 409;
-            throw error;
-          }
-          
-        } else if (insertError.name === 'SequelizeDatabaseError' || insertError.message?.includes('deadlock')) {
+          const error = new Error('Cette réservation existe déjà. Veuillez choisir un autre créneau ou actualiser la page.');
+          error.statusCode = 409;
+          throw error;
+        }
+        
+        if (insertError.name === 'SequelizeDatabaseError' || insertError.message?.includes('deadlock')) {
           const error = new Error('Ce créneau vient d\'être réservé par un autre joueur. Veuillez rafraîchir.');
           error.statusCode = 409;
           throw error;
-        } else {
-          throw insertError;
         }
+        
+        throw insertError;
       }
 
       // ══════════════════════════════════════════════════════════════════════
