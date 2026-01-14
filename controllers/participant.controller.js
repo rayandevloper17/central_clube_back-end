@@ -556,14 +556,14 @@ export default function ParticipantController(models) {
 
   const remove = async (req, res) => {
     const t = await models.sequelize.transaction();
-    
+
     try {
       // Get participant info before deleting
       const participant = await Participant.findByPk(req.params.id, {
         transaction: t,
         lock: t.LOCK.UPDATE
       });
-      
+
       if (!participant) {
         await t.rollback();
         return res.status(404).json({ error: "Participant not found" });
@@ -572,11 +572,11 @@ export default function ParticipantController(models) {
       const reservationId = participant.id_reservation;
 
       // Delete the participant
-      const deleted = await Participant.destroy({ 
+      const deleted = await Participant.destroy({
         where: { id: req.params.id },
         transaction: t
       });
-      
+
       if (!deleted) {
         await t.rollback();
         return res.status(404).json({ error: "Participant not found" });
@@ -598,12 +598,14 @@ export default function ParticipantController(models) {
 
       if (reservation) {
         const isOpenMatch = Number(reservation.typer) === 2;
+        const isPrivateMatch = Number(reservation.typer) === 1;
         const wasValid = Number(reservation.etat) === 1;
 
-        // If open match was valid but now has < 4 players, revert to pending
-        if (isOpenMatch && wasValid && remainingCount < 4) {
-          console.log(`[ParticipantController] Open match dropped below 4 players - reverting to pending`);
-          
+        // ✅ FIX: Revert to pending for BOTH open and private matches when < 4 players
+        // A match (any type) is only valid when it has 4 players
+        if (wasValid && remainingCount < 4) {
+          console.log(`[ParticipantController] Match dropped below 4 players (${remainingCount}/4) - reverting to pending`);
+
           // etat: 0 = pending (not valid)
           await reservation.update({
             etat: 0,
@@ -626,7 +628,7 @@ export default function ParticipantController(models) {
       }
 
       await t.commit();
-      res.json({ 
+      res.json({
         success: true,
         remainingPlayers: remainingCount,
         maxPlayers: 4,
@@ -635,7 +637,7 @@ export default function ParticipantController(models) {
 
     } catch (error) {
       console.error("[ParticipantController] Error removing participant:", error);
-      try { await t.rollback(); } catch {}
+      try { await t.rollback(); } catch { }
       res.status(400).json({ error: error.message });
     }
   };
