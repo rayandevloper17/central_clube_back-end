@@ -445,7 +445,7 @@ export default function ReservationService(models) {
         id_plage_horaire: plageHoraireId,
         date: date,
         isCancel: 0,
-        etat: 1  // ← CRITICAL: Only count VALID reservations!
+        etat: { [Op.ne]: -1 }  // ← Count BOTH pending AND valid!
       },
       transaction: t,
       lock: t.LOCK.UPDATE
