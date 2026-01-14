@@ -71,7 +71,7 @@ export async function getNotificationsForUser(userId) {
         order: [['created_at', 'DESC']],
         limit: 50 // Limit history
       });
-      
+
       // Map to frontend expected format
       // We need to fetch submitter names efficiently
       // For simplicity, we'll let the frontend display "Système" or simple messages
@@ -81,10 +81,10 @@ export async function getNotificationsForUser(userId) {
       for (const n of notifs) {
         let submitterName = 'Système';
         if (n.submitter_id && _models.utilisateur) {
-           const u = await _models.utilisateur.findByPk(n.submitter_id);
-           if (u) submitterName = `${u.prenom} ${u.nom}`.trim();
+          const u = await _models.utilisateur.findByPk(n.submitter_id);
+          if (u) submitterName = `${u.prenom} ${u.nom}`.trim();
         }
-        
+
         results.push({
           id: n.id,
           recipient_id: n.recipient_id,
@@ -126,6 +126,30 @@ export async function markNotificationRead(id) {
     return _notifications[idx];
   }
   return null;
+}
+
+// ✅ NEW: Mark all notifications as read for a user
+export async function markAllNotificationsRead(userId) {
+  if (_models && _models.notification) {
+    try {
+      await _models.notification.update(
+        { is_read: true },
+        { where: { recipient_id: userId, is_read: false } }
+      );
+      return { success: true, message: 'All notifications marked as read' };
+    } catch (err) {
+      console.error('Failed to mark all notifications as read:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  // In-memory fallback
+  _notifications.forEach(n => {
+    if (String(n.recipient_id) === String(userId)) {
+      n.isRead = true;
+    }
+  });
+  return { success: true, message: 'All notifications marked as read' };
 }
 
 export function removeAll() {

@@ -26,7 +26,7 @@ import reservationRoutes from './routes/reservation.routes.js';
 import matchRoutes from './routes/matchRoutes.js';
 import reservationUtilisateurRoutes from './routes/reservationUtilisateur.routes.js';
 import createVerificationEmailRoutes from './routes/emailVerification.route.js';
-import { addNotification, getNotificationsForUser, markNotificationRead, setNotificationModels } from './utils/notificationBus.js';
+import { addNotification, getNotificationsForUser, markNotificationRead, markAllNotificationsRead, setNotificationModels } from './utils/notificationBus.js';
 
 // Initialize Sequelize
 const sequelize = new Sequelize(
@@ -60,13 +60,13 @@ if (models.plage_horaire && models.terrain) {
     foreignKey: 'terrain_id',
     as: 'terrain'
   });
-  
+
   // Terrain has many PlageHoraires
   models.terrain.hasMany(models.plage_horaire, {
     foreignKey: 'terrain_id',
     as: 'plageHoraires'
   });
-  
+
   console.log('✅ PlageHoraire <-> Terrain association created');
 } else {
   console.log('⚠️ Could not create PlageHoraire <-> Terrain association');
@@ -80,53 +80,53 @@ if (models.reservation && models.plage_horaire) {
     foreignKey: 'id_plage_horaire',
     as: 'plage_horaire'
   });
-  
+
   models.plage_horaire.hasMany(models.reservation, {
     foreignKey: 'id_plage_horaire',
     as: 'reservations'
   });
-  
- 
+
+
 
   models.participant.belongsTo(models.reservation, {
     foreignKey: 'id_reservation',  // must match column in participant table
     as: 'reservation'
   });
-  
+
 
   // Add association between reservation and note_utilisateur
-if (models.reservation && models.note_utilisateur) {
-  models.reservation.hasMany(models.note_utilisateur, {
-    foreignKey: 'id_reservation',
-    as: 'notes'
-  });
+  if (models.reservation && models.note_utilisateur) {
+    models.reservation.hasMany(models.note_utilisateur, {
+      foreignKey: 'id_reservation',
+      as: 'notes'
+    });
 
-  models.note_utilisateur.belongsTo(models.reservation, {
-    foreignKey: 'id_reservation',
-    as: 'reservation'
-  });
+    models.note_utilisateur.belongsTo(models.reservation, {
+      foreignKey: 'id_reservation',
+      as: 'reservation'
+    });
 
-  console.log('✅ Reservation <-> NoteUtilisateur association created');
-} else {
-  console.log('⚠️ Could not create Reservation <-> NoteUtilisateur association');
-}
+    console.log('✅ Reservation <-> NoteUtilisateur association created');
+  } else {
+    console.log('⚠️ Could not create Reservation <-> NoteUtilisateur association');
+  }
 
-// Add association between note_utilisateur and utilisateur for id_noteur
-if (models.note_utilisateur && models.utilisateur) {
-  models.note_utilisateur.belongsTo(models.utilisateur, {
-    foreignKey: 'id_noteur',
-    as: 'noteur'
-  });
+  // Add association between note_utilisateur and utilisateur for id_noteur
+  if (models.note_utilisateur && models.utilisateur) {
+    models.note_utilisateur.belongsTo(models.utilisateur, {
+      foreignKey: 'id_noteur',
+      as: 'noteur'
+    });
 
-  models.utilisateur.hasMany(models.note_utilisateur, {
-    foreignKey: 'id_noteur',
-    as: 'notesGiven'
-  });
+    models.utilisateur.hasMany(models.note_utilisateur, {
+      foreignKey: 'id_noteur',
+      as: 'notesGiven'
+    });
 
-  console.log('✅ NoteUtilisateur <-> Utilisateur (noter) association created');
-} else {
-  console.log('⚠️ Could not create NoteUtilisateur <-> Utilisateur (noter) association');
-}
+    console.log('✅ NoteUtilisateur <-> Utilisateur (noter) association created');
+  } else {
+    console.log('⚠️ Could not create NoteUtilisateur <-> Utilisateur (noter) association');
+  }
 
 
 
@@ -143,7 +143,7 @@ if (models.note_utilisateur && models.utilisateur) {
   });
 
   models.reservation.belongsTo(models.terrain, {
-    foreignKey: 'id_terrain', 
+    foreignKey: 'id_terrain',
     as: 'terrain'
   });
 
@@ -151,7 +151,7 @@ if (models.note_utilisateur && models.utilisateur) {
     foreignKey: 'id_utilisateur',
     as: 'utilisateur'
   });
-  
+
   console.log('✅ Reservation <-> PlageHoraire association created');
 }
 
@@ -235,8 +235,8 @@ app.use(sanitizeInput);
 
 // Health check endpoint (no authentication needed)
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
+  res.json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
@@ -244,7 +244,7 @@ app.get('/health', (req, res) => {
 
 // Test endpoint to verify routes are working
 app.get('/api/test', (req, res) => {
-  res.json({ 
+  res.json({
     message: 'API routes are working!',
     timestamp: new Date().toISOString(),
     availableRoutes: {
@@ -272,22 +272,22 @@ app.get('/api/reservation-utilisateur/code/:code', (req, res) => {
     try {
       const ReservationUtilisateurService = (await import('./services/reservationUtilisateur.service.js')).default;
       const ReservationUtilisateurController = (await import('./controllers/reservationUtilisateur.controller.js')).default;
-      
+
       const service = ReservationUtilisateurService(models);
       const controller = ReservationUtilisateurController(service, models);
-      
+
       // Call the findByCode method directly
       await controller.findByCode(req, res);
     } catch (error) {
       console.error('Error in public reservation search by code:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'Erreur serveur',
         message: 'Une erreur est survenue lors de la recherche de la réservation'
       });
     }
   }).catch(error => {
     console.error('Unhandled error in public reservation search by code:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erreur serveur',
       message: 'Une erreur est survenue lors de la recherche de la réservation'
     });
@@ -344,6 +344,17 @@ app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
   }
 });
 
+// ✅ NEW: Mark all notifications as read for a user
+app.put('/api/notifications/user/:userId/read-all', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const result = await markAllNotificationsRead(userId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Static file serving (public)
 // Ensure uploads directory exists and serve it statically
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
@@ -354,7 +365,7 @@ app.use('/uploads', express.static(uploadsDir));
 
 // ✅ 404 HANDLER - FIXED FOR EXPRESS 5.x
 app.use('/*catchall', (req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     error: 'Route non trouvée',
     message: `La route ${req.method} ${req.originalUrl} n'existe pas`,
     availableRoutes: [
@@ -379,7 +390,7 @@ app.use((err, req, res, next) => {
 
   // Handle specific error types
   if (err.name === 'ValidationError') {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: 'Erreur de validation',
       message: err.message,
       details: err.errors
@@ -388,7 +399,7 @@ app.use((err, req, res, next) => {
 
 
   if (err.name === 'SequelizeUniqueConstraintError') {
-    return res.status(409).json({ 
+    return res.status(409).json({
       error: 'Conflit de données',
       message: 'Cette ressource existe déjà',
       field: err.errors?.[0]?.path
@@ -396,14 +407,14 @@ app.use((err, req, res, next) => {
   }
 
   if (err.name === 'SequelizeForeignKeyConstraintError') {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: 'Référence invalide',
       message: 'Référence vers une ressource inexistante'
     });
   }
 
   if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({ 
+    return res.status(401).json({
       error: 'Token invalide',
       message: 'Votre session a expiré, veuillez vous reconnecter'
     });
@@ -411,7 +422,7 @@ app.use((err, req, res, next) => {
 
   // Default error response
   const statusCode = err.status || err.statusCode || 500;
-  res.status(statusCode).json({ 
+  res.status(statusCode).json({
     error: statusCode === 500 ? 'Erreur serveur interne' : err.message,
     message: statusCode === 500 ? 'Une erreur inattendue s\'est produite' : err.message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
@@ -427,7 +438,7 @@ const PORT = process.env.PORT || 3001;
     await sequelize.authenticate();
     console.log('✅ Database connection successful!');
     console.log('📋 Available models:', Object.keys(models));
-    
+
     // Skip table sync to avoid permission issues
     // Only sync if explicitly needed and user has permissions
     // FORCED SYNC: To apply schema changes (removing unique constraint for open matches)
@@ -437,7 +448,7 @@ const PORT = process.env.PORT || 3001;
     } else {
       console.log('⏭️ Database sync skipped (use ENABLE_DB_SYNC=true to enable)');
     }
-     
+
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
       console.log(`📚 API Documentation: http://0.0.0.0:${PORT}/health`);
