@@ -80,9 +80,13 @@ export async function getNotificationsForUser(userId) {
       const results = [];
       for (const n of notifs) {
         let submitterName = 'Système';
+        let submitterPhoto = null;
         if (n.submitter_id && _models.utilisateur) {
           const u = await _models.utilisateur.findByPk(n.submitter_id);
-          if (u) submitterName = `${u.prenom} ${u.nom}`.trim();
+          if (u) {
+            submitterName = `${u.prenom} ${u.nom}`.trim();
+            submitterPhoto = u.photo; // ✅ Include profile picture
+          }
         }
 
         results.push({
@@ -93,8 +97,13 @@ export async function getNotificationsForUser(userId) {
           type: n.type,
           message: n.message,
           isRead: n.is_read,
+          is_read: n.is_read, // ✅ Both formats
           createdAt: n.created_at,
-          submitterName: submitterName
+          created_at: n.created_at,
+          submitterName: submitterName,
+          submitter_name: submitterName, // ✅ Both formats
+          submitterPhoto: submitterPhoto, // ✅ NEW
+          submitter_photo: submitterPhoto
         });
       }
       return results;
