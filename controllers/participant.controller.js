@@ -330,7 +330,7 @@ export default function ParticipantController(models) {
         }, { transaction: t });
 
         // Import the service to access handleValidMatchCreated
-        const ReservationService = require('../services/reservation.service');
+        // const ReservationService = require('../services/reservation.service');
 
         // Cancel all other open matches for same slot+date
         console.log(`[ParticipantController] Calling handleValidMatchCreated for open match ${id_reservation}`);
