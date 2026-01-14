@@ -555,89 +555,90 @@ export default function ParticipantController(models) {
   };
 
   const remove = async (req, res) => {
-  const t = await models.sequelize.transaction();
-  
-  try {
-    // Get participant info before deleting
-    const participant = await Participant.findByPk(req.params.id, {
-      transaction: t,
-      lock: t.LOCK.UPDATE
-    });
+    const t = await models.sequelize.transaction();
     
-    if (!participant) {
-      await t.rollback();
-      return res.status(404).json({ error: "Participant not found" });
-    }
+    try {
+      // Get participant info before deleting
+      const participant = await Participant.findByPk(req.params.id, {
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
+      
+      if (!participant) {
+        await t.rollback();
+        return res.status(404).json({ error: "Participant not found" });
+      }
 
-    const reservationId = participant.id_reservation;
+      const reservationId = participant.id_reservation;
 
-    // Delete the participant
-    const deleted = await Participant.destroy({ 
-      where: { id: req.params.id },
-      transaction: t
-    });
-    
-    if (!deleted) {
-      await t.rollback();
-      return res.status(404).json({ error: "Participant not found" });
-    }
+      // Delete the participant
+      const deleted = await Participant.destroy({ 
+        where: { id: req.params.id },
+        transaction: t
+      });
+      
+      if (!deleted) {
+        await t.rollback();
+        return res.status(404).json({ error: "Participant not found" });
+      }
 
-    // Check remaining participants count
-    const remainingCount = await Participant.count({
-      where: { id_reservation: reservationId },
-      transaction: t
-    });
+      // Check remaining participants count
+      const remainingCount = await Participant.count({
+        where: { id_reservation: reservationId },
+        transaction: t
+      });
 
-    console.log(`[ParticipantController] Participant removed. Remaining: ${remainingCount}/4`);
+      console.log(`[ParticipantController] Participant removed. Remaining: ${remainingCount}/4`);
 
-    // Get reservation to check if it's an open match
-    const reservation = await models.reservation.findByPk(reservationId, {
-      transaction: t,
-      lock: t.LOCK.UPDATE
-    });
+      // Get reservation to check if it's an open match
+      const reservation = await models.reservation.findByPk(reservationId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
 
-    if (reservation) {
-      const isOpenMatch = Number(reservation.typer) === 2;
-      const wasValid = Number(reservation.etat) === 1;
+      if (reservation) {
+        const isOpenMatch = Number(reservation.typer) === 2;
+        const wasValid = Number(reservation.etat) === 1;
 
-      // If open match was valid but now has < 4 players, revert to pending
-      if (isOpenMatch && wasValid && remainingCount < 4) {
-        console.log(`[ParticipantController] Open match dropped below 4 players - reverting to pending`);
-        
-        await reservation.update({
-          etat: 0, // Back to pending
-          date_modif: new Date()
-        }, { transaction: t });
+        // If open match was valid but now has < 4 players, revert to pending
+        if (isOpenMatch && wasValid && remainingCount < 4) {
+          console.log(`[ParticipantController] Open match dropped below 4 players - reverting to pending`);
+          
+          // etat: 0 = pending (not valid)
+          await reservation.update({
+            etat: 0,
+            date_modif: new Date()
+          }, { transaction: t });
 
-        // Re-enable the slot
-        if (reservation.id_plage_horaire) {
-          const plage = await models.plage_horaire.findByPk(reservation.id_plage_horaire, {
-            transaction: t,
-            lock: t.LOCK.UPDATE
-          });
+          // Re-enable the slot (disponible: true = available)
+          if (reservation.id_plage_horaire) {
+            const plage = await models.plage_horaire.findByPk(reservation.id_plage_horaire, {
+              transaction: t,
+              lock: t.LOCK.UPDATE
+            });
 
-          if (plage) {
-            await plage.update({ disponible: true }, { transaction: t });
-            console.log(`[ParticipantController] Slot ${plage.id} re-enabled (match no longer valid)`);
+            if (plage) {
+              await plage.update({ disponible: true }, { transaction: t });
+              console.log(`[ParticipantController] Slot ${plage.id} re-enabled (disponible=true)`);
+            }
           }
         }
       }
+
+      await t.commit();
+      res.json({ 
+        success: true,
+        remainingPlayers: remainingCount,
+        maxPlayers: 4,
+        spotsRemaining: 4 - remainingCount
+      });
+
+    } catch (error) {
+      console.error("[ParticipantController] Error removing participant:", error);
+      try { await t.rollback(); } catch {}
+      res.status(400).json({ error: error.message });
     }
-
-    await t.commit();
-    res.json({ 
-      success: true,
-      remainingPlayers: remainingCount,
-      maxPlayers: 4,
-      spotsRemaining: 4 - remainingCount
-    });
-
-  } catch (error) {
-    console.error("[ParticipantController] Error removing participant:", error);
-    try { await t.rollback(); } catch {}
-    res.status(400).json({ error: error.message });
-  }
-};
+  };
 
   const findByReservation = async (req, res) => {
     try {
