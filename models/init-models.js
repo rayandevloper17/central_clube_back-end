@@ -12,6 +12,7 @@ import _terrain from './terrain.js';
 import _disponibilite_terrain from './disponibilite_terrain.js';
 import _plage_horaire from './plage_horaire.js';
 import _verification_email from './verification_email.js';
+import _notification from './notification.js'; // ✅ NEW: Notification model
 // import _score_reservation from './score_reservation.js'; // DISABLED - table doesn't exist
 // import _score_vote from './score_vote.js'; // DISABLED - file doesn't exist
 // import _club from './club.js'; // DISABLED - file doesn't exist
@@ -27,6 +28,7 @@ function initModels(sequelize) {
   const disponibilite_terrain = _disponibilite_terrain(sequelize, DataTypes);
   const plage_horaire = _plage_horaire(sequelize, DataTypes);
   const verification_email = _verification_email(sequelize, DataTypes);
+  const notification = _notification.init(sequelize, DataTypes); // ✅ NEW: Initialize notification
   // const score_reservation = _score_reservation(sequelize, DataTypes); // DISABLED
   // const score_vote = _score_vote(sequelize, DataTypes); // DISABLED - file doesn't exist
   // const club = _club(sequelize, DataTypes); // DISABLED - file doesn't exist
@@ -42,6 +44,7 @@ function initModels(sequelize) {
     disponibilite_terrain,
     plage_horaire,
     verification_email,
+    notification, // ✅ NEW: Export notification model
     // score_reservation, // DISABLED
     // score_vote, // DISABLED - file doesn't exist
     // club, // DISABLED - file doesn't exist
