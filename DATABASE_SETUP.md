@@ -50,7 +50,7 @@ chmod +x setup_database.sh
 ## After Setup
 
 1. Restart backend server
-2. Test API: `GET http://192.168.1.20:3001/api/memberships/user/521/club/1`
+2. Test API: `GET https://api.padel-mindset.com/api/memberships/user/521/club/1`
 3. Hot restart Flutter app
 4. Check Profile page for membership display
 
