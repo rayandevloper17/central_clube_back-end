@@ -26,6 +26,7 @@ import reservationRoutes from './routes/reservation.routes.js';
 import matchRoutes from './routes/matchRoutes.js';
 import reservationUtilisateurRoutes from './routes/reservationUtilisateur.routes.js';
 import createVerificationEmailRoutes from './routes/emailVerification.route.js';
+import createMembershipRoutes from './routes/membership.routes.js'; // ✅ NEW: Membership routes
 import { addNotification, getNotificationsForUser, markNotificationRead, markAllNotificationsRead, setNotificationModels } from './utils/notificationBus.js';
 
 // Initialize Sequelize
@@ -160,7 +161,8 @@ models.Sequelize = Sequelize;
 models.sequelize = sequelize;
 
 const reservationService = ReservationService(models);
-const reservationController = ReservationController(reservationService);
+const reservationController = ReservationController(reservationService, models); // Pass models for membership helpers
+
 
 // Create Express app
 const app = express();
@@ -310,6 +312,10 @@ app.use('/api/matches', authenticateToken, matchRoutes(models));
 
 // 🔒 PROTECTED ROUTES for reservation-utilisateur operations
 app.use('/api/reservation-utilisateur', authenticateToken, reservationUtilisateurRoutes(models));
+
+// 🔒 PROTECTED ROUTES for membership operations
+app.use('/api/memberships', createMembershipRoutes(models)); // ✅ NEW: Membership routes with internal auth
+
 
 // 🔔 Minimal Notifications API (persistent)
 app.post('/api/notifications', authenticateToken, async (req, res) => {

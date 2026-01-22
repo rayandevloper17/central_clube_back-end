@@ -214,7 +214,7 @@ export default function ParticipantController(models) {
 
         } else {
           // ───────────────────────────────────────────────────────────────────────
-          // 💳 CHARGE: User needs to pay with credit
+          // 💳 CHARGE: User needs to pay with credit (WITH MEMBERSHIP LOGIC)
           // ───────────────────────────────────────────────────────────────────────
 
           console.log(`[ParticipantController] 💳 Processing credit payment for user ${id_utilisateur}`);
@@ -232,9 +232,83 @@ export default function ParticipantController(models) {
             return Number.isFinite(p) && p > 0 ? p : 0;
           })();
 
-          console.log(`[ParticipantController] Slot price: ${slotPrice}`);
+          // 🆕 CHECK IF CREATOR PAID FOR ALL
+          const isCreatorPaid = Number(reservation?.ispayed ?? 0) === 1;
+          if (isCreatorPaid) {
+            console.log(`[ParticipantController] ✨ Reservation ${reservation.id} is PREPAID by creator. Joining is FREE.`);
+          }
 
-          if (slotPrice > 0) {
+
+          // 👑 MEMBERSHIP LOGIC 👑
+          const membership = await models.membership.findOne({
+            where: {
+              id_user: id_utilisateur,
+              dateend: { [models.Sequelize.Op.gte]: new Date() } // Active only
+            },
+            transaction: t
+          });
+
+          let membershipType = Number(membership?.typemmbership ?? 0);
+          let membershipDiscount = 0;
+          let isFree = false;
+          let limitReached = false;
+
+          if (membershipType === 4 && reservation.date) {
+            // Check daily limit for Infinity
+            try {
+              // Count participations for this user on this date
+              const count = await models.participant.count({
+                where: {
+                  id_utilisateur: id_utilisateur
+                },
+                include: [{
+                  model: models.reservation,
+                  as: 'reservation',
+                  where: {
+                    date: reservation.date,
+                    isCancel: 0
+                  }
+                }],
+                transaction: t
+              });
+
+              if (count > 0) {
+                console.log(`[ParticipantController] 👑 User ${id_utilisateur} (Infinity) already has ${count} match(es) on ${reservation.date}. Daily limit reached.`);
+                limitReached = true;
+                membershipType = 0; // Downgrade to normal
+              }
+            } catch (e) {
+              console.error('[ParticipantController] Error checking daily limit:', e);
+            }
+          }
+
+          if (membershipType === 4) { // Infinity
+            isFree = true;
+            console.log(`[ParticipantController] 👑 User ${id_utilisateur} has INFINITY membership - Join is FREE`);
+          } else if (membershipType === 2 || membershipType === 3) { // Gold/Platinum
+            membershipDiscount = 300;
+            console.log(`[ParticipantController] 👑 User ${id_utilisateur} has Gold/Platinum - Discount: ${membershipDiscount} DA`);
+          }
+
+          if (limitReached) {
+            console.log(`[ParticipantController] ℹ️ Membership daily limit applied. User treated as Normal.`);
+          }
+
+          // Calculate final price
+          let finalPrice = slotPrice;
+
+          if (isCreatorPaid) {
+            finalPrice = 0;
+          } else if (isFree) {
+            finalPrice = 0;
+          } else {
+            finalPrice = slotPrice - membershipDiscount;
+            if (finalPrice < 0) finalPrice = 0;
+          }
+
+          console.log(`[ParticipantController] Price calculation: Base=${slotPrice}, Discount=${membershipDiscount}, Prepaid=${isCreatorPaid}, Final=${finalPrice}`);
+
+          if (finalPrice > 0) {
             // Lock user for balance operations
             const joiner = await models.utilisateur.findByPk(id_utilisateur, {
               transaction: t,
@@ -250,23 +324,23 @@ export default function ParticipantController(models) {
 
             console.log(`[ParticipantController] Balance check:`, {
               currentBalance,
-              slotPrice,
-              sufficient: currentBalance >= slotPrice
+              required: finalPrice,
+              sufficient: currentBalance >= finalPrice
             });
 
             // Check sufficient balance
-            if (!Number.isFinite(currentBalance) || currentBalance < slotPrice) {
+            if (!Number.isFinite(currentBalance) || currentBalance < finalPrice) {
               await t.rollback();
               return res.status(400).json({
                 error: "Solde de crédit insuffisant",
                 code: "INSUFFICIENT_BALANCE",
                 currentBalance: currentBalance,
-                required: slotPrice
+                required: finalPrice
               });
             }
 
             // Deduct balance
-            const newBalance = currentBalance - slotPrice;
+            const newBalance = currentBalance - finalPrice;
             await joiner.update({ credit_balance: newBalance }, { transaction: t });
 
             // Generate unique transaction ID to allow re-joining
@@ -275,16 +349,18 @@ export default function ParticipantController(models) {
             // Record payment transaction
             await models.credit_transaction.create({
               id_utilisateur: id_utilisateur,
-              nombre: -slotPrice,
+              nombre: -finalPrice,
               type: `debit:join:R${id_reservation}:U${id_utilisateur}:T${teamIndex}:${uniqueTxId}`,
               date_creation: new Date()
             }, { transaction: t });
 
-            console.log(`[ParticipantController] ✅ Charged ${slotPrice} credits:`, {
+            console.log(`[ParticipantController] ✅ Charged ${finalPrice} credits:`, {
               oldBalance: currentBalance,
               newBalance: newBalance,
               transactionId: `debit:join:R${id_reservation}:U${id_utilisateur}:T${teamIndex}:${uniqueTxId}`
             });
+          } else {
+            console.log(`[ParticipantController] ✅ Join is FREE (Infinity or covered by discount). No charge.`);
           }
         }
       }
@@ -570,6 +646,50 @@ export default function ParticipantController(models) {
       }
 
       const reservationId = participant.id_reservation;
+
+      // ════════════════════════════════════════════════════════════════════════
+      // 💰 REFUND LOGIC: Check if user actually paid before refunding
+      // ════════════════════════════════════════════════════════════════════════
+      if (Number(participant.statepaiement) === 1) {
+        const userDebit = await models.credit_transaction.findOne({
+          where: {
+            id_utilisateur: participant.id_utilisateur,
+            [models.Sequelize.Op.or]: [
+              { type: `debit:reservation:R${reservationId}:U${participant.id_utilisateur}:creator` },
+              { type: { [models.Sequelize.Op.like]: `debit:join:R${reservationId}:U${participant.id_utilisateur}%` } }
+            ],
+            nombre: { [models.Sequelize.Op.lt]: 0 }
+          },
+          transaction: t
+        });
+
+        if (userDebit) {
+          const refundAmount = Math.abs(Number(userDebit.nombre));
+
+          const user = await models.utilisateur.findByPk(participant.id_utilisateur, {
+            transaction: t,
+            lock: t.LOCK.UPDATE
+          });
+
+          if (user) {
+            await user.update({
+              credit_balance: (user.credit_balance ?? 0) + refundAmount
+            }, { transaction: t });
+
+            const uniqueRefundId = Date.now().toString();
+            await models.credit_transaction.create({
+              id_utilisateur: participant.id_utilisateur,
+              nombre: refundAmount,
+              type: `refund:leave:R${reservationId}:U${participant.id_utilisateur}:${uniqueRefundId}`,
+              date_creation: new Date()
+            }, { transaction: t });
+
+            console.log(`[ParticipantController] ✅ Refunded ${refundAmount} to user ${participant.id_utilisateur} leaving match`);
+          }
+        } else {
+          console.log(`[ParticipantController] ℹ️ User ${participant.id_utilisateur} has statepaiement=1 but no debit found (Infinity?). No refund.`);
+        }
+      }
 
       // Delete the participant
       const deleted = await Participant.destroy({

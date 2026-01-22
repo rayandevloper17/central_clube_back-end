@@ -618,9 +618,9 @@ export default function ReservationService(models) {
         }
       }
 
-      // ══════════════════════════════════════════════════════════════════════
-      // STEP 7: Handle payment and balance deduction
-      // ══════════════════════════════════════════════════════════════════════
+      // ════════════════════════════════════════════════════════════════════════════════
+      // STEP 7: Handle payment and balance deduction (WITH MEMBERSHIP LOGIC)
+      // ════════════════════════════════════════════════════════════════════════════════
 
       // 🔥 FIX: More robust payment type detection
       const creatorPayType = (() => {
@@ -637,31 +637,141 @@ export default function ReservationService(models) {
       const isOnsitePayment = (creatorPayType === 2) || (etatVal === 0);
       const shouldSkipDeduction = (typerVal === 1) && isOnsitePayment;
 
+      // 👑 MEMBERSHIP LOGIC 👑
+      // Fetch user's active membership
+      // Pass match date to check for daily limits
+      // We need to import membershipService logic or replicate it here. 
+      // For cleaner architecture, we should rely on the membership service instance if available,
+      // but here we are using models directly. 
+      // We'll use the checkMembershipExpiry helper from our new membership service logic.
+      // Since we don't have the membershipService instance injected here clearly, 
+      // we'll instantiate it or assume we can use the logic.
+      // Ideally, we should use: const { checkMembershipExpiry } = MembershipService(models);
+
+      // Let's assume we can access the logic. To be safe and self-contained within this file 
+      // without big refactors, I will verify the membership manually here OR better:
+      // use the logic we just added to membership service if I can require it.
+      // Actually, standard pattern in this codebase seems to be direct model access.
+      // However, checkMembershipExpiry is quite complex now.
+
+      // Let's implement the daily check locally here to avoid import circles or injection issues,
+      // closely mirroring the membership service logic.
+
+      const membership = await models.membership.findOne({
+        where: {
+          id_user: data.id_utilisateur,
+          dateend: { [Op.gte]: new Date() } // Active only
+        },
+        transaction: t
+      });
+
+      let membershipType = Number(membership?.typemmbership ?? 0);
+      let membershipDiscount = 0;
+      let isFree = false;
+      let limitReached = false;
+
+      // Check daily limit for Infinity (Type 4)
+      if (membershipType === 4 && data.date) {
+        try {
+          // Count participations for this user on this date
+          // We need to include cancellations check logic properly
+          const count = await models.participant.count({
+            where: {
+              id_utilisateur: data.id_utilisateur
+            },
+            include: [{
+              model: models.reservation,
+              as: 'reservation',
+              where: {
+                date: data.date,
+                isCancel: 0
+              }
+            }],
+            transaction: t
+          });
+
+          if (count > 0) {
+            console.log(`[ReservationService] 👑 User ${data.id_utilisateur} (Infinity) already has ${count} match(es) on ${data.date}. Daily limit reached.`);
+            limitReached = true;
+            // Downgrade to Normal for this transaction
+            membershipType = 0;
+          }
+        } catch (e) {
+          console.error('[ReservationService] Error checking daily limit:', e);
+        }
+      }
+
+      if (membershipType === 4) { // Infinity
+        isFree = true;
+        console.log(`[ReservationService] 👑 User ${data.id_utilisateur} has INFINITY membership - Match is FREE`);
+      } else if (membershipType === 2 || membershipType === 3) { // Gold (2) or Platinum (3)
+        membershipDiscount = 300;
+        console.log(`[ReservationService] 👑 User ${data.id_utilisateur} has Gold/Platinum - Discount: ${membershipDiscount} DA`);
+      }
+
+      if (limitReached) {
+        console.log(`[ReservationService] ℹ️ Membership daily limit applied. User treated as Normal.`);
+      }
+
       console.log(`[ReservationService] 💳 Payment detection:`, {
         typepaiementForCreator: data.typepaiementForCreator,
-        typepaiement: data.typepaiement,
-        etat: data.etat,
-        resolved_creatorPayType: creatorPayType,
-        resolved_isOnsitePayment: isOnsitePayment
+        creatorPayType,
+        isOnsitePayment,
+        membershipType,
+        isFree,
+        membershipDiscount,
+        limitReached
       });
 
       // Store the charge amount for later use
       let creatorCharge = 0;
+      let totalChargeToDeduct = 0; // Total to deduct from balance
+      let isPayForAll = false;
 
-      if (!shouldSkipDeduction) {
-        // Creator always pays full price
-        creatorCharge = normalizedPrice;
+      // Check for Pay For All flag
+      if (data.payForAll === true || data.payForAll === 'true' || data.payForAll === 1) {
+        isPayForAll = true;
+        console.log(`[ReservationService] 💸 "Pay for All" selected by user ${data.id_utilisateur}`);
+      }
 
+      if (!shouldSkipDeduction && !isFree) {
+        // Apply discount if applicable
+        let finalPrice = normalizedPrice - membershipDiscount;
+        if (finalPrice < 0) finalPrice = 0;
+
+        creatorCharge = finalPrice;
+      } else if (isFree && !shouldSkipDeduction) {
+        // Infinity members don't pay, but effectively "charge" is 0
+        creatorCharge = 0;
+      }
+
+      // Calculate Total Charge (Creator + 3 others if PayForAll)
+      if (isPayForAll && !shouldSkipDeduction) {
+        // Pay for 3 additional slots at standard price (normalizedPrice)
+        // Others don't get creator's discount
+        const extraSlotsCost = 3 * normalizedPrice;
+
+        totalChargeToDeduct = creatorCharge + extraSlotsCost;
+        console.log(`[ReservationService] 🧾 Pay For All Calculation: Creator(${creatorCharge}) + 3xStandard(${extraSlotsCost}) = ${totalChargeToDeduct}`);
+      } else {
+        totalChargeToDeduct = creatorCharge;
+      }
+
+      // Check balance
+      if (!shouldSkipDeduction && totalChargeToDeduct > 0) {
         const currentBalance = Number(utilisateur.credit_balance ?? 0);
 
-        if (!Number.isFinite(currentBalance) || currentBalance < creatorCharge) {
-          throw new Error('Insufficient balance');
+        if (!Number.isFinite(currentBalance) || currentBalance < totalChargeToDeduct) {
+          throw new Error(`Solde insuffisant pour "Payer pour tous" (Requis: ${totalChargeToDeduct}, Actuel: ${currentBalance})`);
         }
 
         await utilisateur.update(
-          { credit_balance: currentBalance - creatorCharge },
+          { credit_balance: currentBalance - totalChargeToDeduct },
           { transaction: t }
         );
+      } else {
+        // Just for logging or if skipping deduction
+        totalChargeToDeduct = 0;
       }
 
       // ══════════════════════════════════════════════════════════════════════
@@ -682,19 +792,37 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 9: Create the reservation
       // ══════════════════════════════════════════════════════════════════════
-      const payload = { ...data, prix_total: normalizedPrice };
+      // If PayForAll, store the TOTAL amount paid in prix_total so refunds work easily
+      // Also set ispayed = 1
+      const payload = {
+        ...data,
+        prix_total: isPayForAll ? totalChargeToDeduct : normalizedPrice, // Store actual unit cost or total? Cancel logic uses this.
+        // Wait, if I store totalChargeToDeduct (e.g. 4000), and I join. 
+        // Join logic sees "prix_total". 
+        // If PayForAll is OFF, prix_total is 1000. Joiner pays 1000.
+        // If PayForAll is ON, prix_total is 4000. Joiner SHOULD pay 0.
+        // IsPayed = 1 logic will handle the 0 charge.
+        // Refund logic uses prix_total. So storing 4000 here is CORRECT for refunding the creator.
+        ispayed: isPayForAll ? 1 : 0
+      };
+
+      // NOTE: If PayForAll is false, prix_total is normalizedPrice (1000).
+      // Refund refunds 1000 to creator. Correct.
+      // If PayForAll is true, prix_total is 4000 (approx). 
+      // Refund refunds 4000 to creator. Correct.
 
       let reservation;
       try {
         reservation = await models.reservation.create(payload, { transaction: t });
-        console.log('[ReservationService] ✅ Created reservation', { id: reservation.id, slotId: plage.id });
+        console.log('[ReservationService] ✅ Created reservation', { id: reservation.id, slotId: plage.id, isPayForAll });
 
         // Record the credit_transaction AFTER reservation is created
-        if (!shouldSkipDeduction && creatorCharge > 0) {
+        // ONLY log if actual charge > 0
+        if (!shouldSkipDeduction && totalChargeToDeduct > 0) {
           await models.credit_transaction.create({
             id_utilisateur: data.id_utilisateur,
-            nombre: -creatorCharge,
-            type: `debit:reservation:R${reservation.id}:U${data.id_utilisateur}:creator`,
+            nombre: -totalChargeToDeduct,
+            type: `debit:reservation:R${reservation.id}:U${data.id_utilisateur}:creator`, // Same type key, but amount is larger
             date_creation: new Date()
           }, { transaction: t });
 
@@ -703,7 +831,7 @@ export default function ReservationService(models) {
             recipient_id: data.id_utilisateur,
             reservation_id: reservation.id,
             type: 'credit_deduction',
-            message: `Votre réservation a été confirmée. ${creatorCharge} crédits ont été débités de votre compte.`
+            message: `Votre réservation a été confirmée. ${totalChargeToDeduct} crédits ont été débités.`
           });
         }
 
@@ -1047,7 +1175,25 @@ export default function ReservationService(models) {
         // Creator cancels - Refund EVERYONE and FREE THE SLOT
         for (const p of participants) {
           if (Number(p.statepaiement) === 1) {
-            await refundUser(p.id_utilisateur, slotPrice);
+            // 🔥 CRITICAL FIX: Check if user ACTUALLY paid before refunding
+            // Verify debit transaction exists
+            const userDebit = await models.credit_transaction.findOne({
+              where: {
+                id_utilisateur: p.id_utilisateur,
+                [Op.or]: [
+                  { type: `debit:reservation:R${reservation.id}:U${p.id_utilisateur}:creator` },
+                  { type: { [Op.like]: `debit:join:R${reservation.id}:U${p.id_utilisateur}%` } }
+                ],
+                nombre: { [Op.lt]: 0 }
+              },
+              transaction: t
+            });
+
+            if (userDebit) {
+              await refundUser(p.id_utilisateur, Math.abs(Number(userDebit.nombre)));
+            } else {
+              console.log(`[CancelService] ℹ️ User ${p.id_utilisateur} did not pay (Infinity/Onsite) - No refund.`);
+            }
           }
         }
 
@@ -1082,7 +1228,24 @@ export default function ReservationService(models) {
         if (!cancellerParticipant) throw new Error('User is not a participant');
 
         if (Number(cancellerParticipant.statepaiement) === 1) {
-          await refundUser(cancellingUserId, slotPrice);
+          // 🔥 CRITICAL FIX: Check if user ACTUALLY paid before refunding
+          const userDebit = await models.credit_transaction.findOne({
+            where: {
+              id_utilisateur: cancellingUserId,
+              [Op.or]: [
+                { type: `debit:reservation:R${reservation.id}:U${cancellingUserId}:creator` },
+                { type: { [Op.like]: `debit:join:R${reservation.id}:U${cancellingUserId}%` } }
+              ],
+              nombre: { [Op.lt]: 0 }
+            },
+            transaction: t
+          });
+
+          if (userDebit) {
+            await refundUser(cancellingUserId, Math.abs(Number(userDebit.nombre)));
+          } else {
+            console.log(`[CancelService] ℹ️ User ${cancellingUserId} did not pay (Infinity/Onsite) - No refund.`);
+          }
         }
 
         await models.participant.destroy({ where: { id_reservation: id, id_utilisateur: cancellingUserId }, transaction: t });

@@ -1,0 +1,65 @@
+### Test Membership API Endpoints
+### Replace {{baseUrl}} with http://192.168.1.20:3001/api
+### Replace {{token}} with your actual JWT token
+
+@baseUrl = http://192.168.1.20:3001/api
+@token = YOUR_JWT_TOKEN_HERE
+@userId = 521
+@clubId = 1
+
+### 1. Get Membership for User
+GET {{baseUrl}}/memberships/user/{{userId}}/club/{{clubId}}
+Authorization: Bearer {{token}}
+
+### 2. Get All User Memberships
+GET {{baseUrl}}/memberships/user/{{userId}}
+Authorization: Bearer {{token}}
+
+### 3. Get Membership Rules for Type (0=Normal, 1=Access, 2=Gold, 3=Platinum, 4=Infinity)
+GET {{baseUrl}}/memberships/rules/2
+Authorization: Bearer {{token}}
+
+### 4. Create New Membership
+POST {{baseUrl}}/memberships
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "id_user": 521,
+  "id_club": 1,
+  "dateend": "2026-12-31T23:59:59.000Z",
+  "typemmbership": 2
+}
+
+### 5. Update Membership
+PUT {{baseUrl}}/memberships/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "dateend": "2027-06-30T23:59:59.000Z",
+  "typemmbership": 3
+}
+
+### 6. Delete Membership
+DELETE {{baseUrl}}/memberships/1
+Authorization: Bearer {{token}}
+
+### 7. Get Date Range for User (Reservation Integration)
+GET {{baseUrl}}/reservations/date-range/{{userId}}/{{clubId}}
+Authorization: Bearer {{token}}
+
+### 8. Check if User Can Create Open Match
+GET {{baseUrl}}/reservations/can-create-open/{{userId}}/{{clubId}}
+Authorization: Bearer {{token}}
+
+### 9. Validate Cancellation Timing
+POST {{baseUrl}}/reservations/validate-cancellation
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "userId": 521,
+  "clubId": 1,
+  "reservationDate": "2026-01-25T14:00:00.000Z"
+}

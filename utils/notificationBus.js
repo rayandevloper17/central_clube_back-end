@@ -35,8 +35,10 @@ export async function addNotification({ recipient_id, reservation_id, submitter_
         submitter_id,
         type: type || 'info',
         message: finalMessage,
+        score_data: null, // ✅ Explicitly set to null
         is_read: false,
-        created_at: new Date()
+        created_at: new Date(),
+        read_at: null // ✅ Explicitly set to null
       });
       return notif;
     } catch (err) {

@@ -1,0 +1,76 @@
+IN : PS E:\backend\backend> 
+
+we have w new senrio we need to build is the : mmbership of the user 
+we have 5 mmbership type : 
+0 - normal 
+1 - accese 
+2 - Gold 
+3 - platinum 
+4 - infinity 
+ 
+
+So  firs e need add the modul of it in moduls in the backend project ..
+this is it 
+
+name : membership 
+ - id  : bigint : primiery key 
+ - id_user  bigint 
+ - id_club  bigint 
+ - dateend date
+ - typemmbership bigint   :
+ 
+and then u will go to creat the controller and the services and the routing and the midliwear of it .. 
+ - So the logic of the mmbership working like this : 
+ -  the type 0 : normal is : 
+                 - in the plage hourair pric of the reservation u will display it normlly as u get it from the db 
+                 - the user can't open match ouvert ( make it diable in reservation page ) but can opoen match prv . 
+                 - the user can will see just ( 15 days in the date piker list in the reservation page ) 
+                 - the user can cancel reservation 48h before the match start  
+                 - can join in prv match and ouvert also ( but can creat it ( ouvert match)) 
+
+
+- the type 1  : access is : 
+                - in the plage hourair pric of the reservation u will display it normlly as u get it from the db 
+                - the user can open match ouvert and prv . 
+                - the user can will see just ( 19 days in the date piker list in the reservation page ) 
+                - the user can cancel reservation 24h before the match start  
+                - can join in prv match and ouvert also
+- the type 2  : gold is : 
+                -every balance make it calculate -300 ( means if the creino from the db is 1000 so the system when he reserve will take a  700  from the balance )
+                - in the plage hourair pric of the reservation u will display it normlly as u get it from the db 
+                - the user can open match ouvert and prv . 
+                - the user can will see just ( 21 days in the date piker list in the reservation page ) 
+                - the user can cancel reservation 24h before the match start  
+                - can join in prv match and ouvert also ( all)
+
+                - can join in prv match and ouvert also
+
+- the type 3  : platinum is : 
+                -every balance make it calculate -300 ( means if the creino from the db is 1000 so the system when he reserve will take a  700  from the balance )
+                - in the plage hourair pric of the reservation u will display it normlly as u get it from the db 
+                - the user can open match ouvert and prv . 
+                - the user can will see just ( 28 days in the date piker list in the reservation page ) 
+                - the user can cancel reservation 12h before the match start  
+                - can join in prv match and ouvert also ( all)
+
+
+- the type 4  :  infinity is : 
+                -Here when the user is infinity wil lnever pay for the reservesion u will appear it like its for free ..
+                - in the plage hourair pric of the reservation u will display it normlly as u get it from the db 
+                - the user can open match ouvert and prv . 
+                - the user can will see just ( 28 days in the date piker list in the reservation page ) 
+                - the user can cancel reservation 24h before the match start  
+                - can join in prv match and ouvert also ( all)
+
+
+
+
+So this is the condition that u woill buuld the cointrollers afor it 
+and u will edit the reservation page to make it work with the membership  
+
+and in the modul as u see there is : dateend always in every action u will verfy this 
+" dateend " ifit;s over u will stopt that offre for him and make it is normall user and apply the condition of it for him 
+
+
+also apply all those chnages in the frontend side ( controller getx etc .. and the ui of it ) 
+and int the profile of the user show the type of the membership by the color them of it 

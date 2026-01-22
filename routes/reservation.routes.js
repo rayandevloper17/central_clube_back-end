@@ -34,5 +34,10 @@ export default function reservationRoutes(reservationController, notificationCon
   // router.get('/:id/score-status', authenticateToken, reservationController.getScoreStatus);
   // router.post('/finalize-pending-scores', authenticateToken, reservationController.finalizePendingScores);
 
+  // NEW: Membership-based reservation endpoints
+  router.get('/date-range/:userId/:clubId', authenticateToken, reservationController.getDateRange);
+  router.get('/can-create-open/:userId/:clubId', authenticateToken, reservationController.canCreateOpenMatch);
+  router.post('/validate-cancellation', authenticateToken, reservationController.validateCancellation);
+
   return router;
 }
