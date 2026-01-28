@@ -250,6 +250,54 @@ export default function ReservationController(reservationService, models) {
     }
   };
 
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // SCORE MANAGEMENT (NEW)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * PUT /reservations/:id/score
+   */
+  const updateScore = async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { submitter_id } = req.body; // Or from req.user
+
+      // req.body should match expected structure: 
+      // { set1: {a,b}, set2: {a,b}, set3: {a,b}, set3_mode: '...' }
+
+      const result = await reservationService.updateScore(id, req.body, submitter_id || req.user?.id);
+      return res.status(200).json(result);
+    } catch (error) {
+      console.error('[ReservationController] UpdateScore error:', error.message);
+
+      if (error.message.includes('not found')) {
+        return res.status(404).json({ error: error.message });
+      }
+      if (error.message.includes('Invalid') || error.message.includes('required')) {
+        return res.status(400).json({ error: error.message });
+      }
+      if (error.message.includes('locked') || error.message.includes('confirmed')) {
+        return res.status(409).json({ error: error.message });
+      }
+
+      return res.status(500).json({ error: 'Failed to update score' });
+    }
+  };
+
+  /**
+   * POST /reservations/finalize-pending-scores
+   */
+  const finalizePendingScores = async (req, res) => {
+    try {
+      const result = await reservationService.finalizePendingScores();
+      return res.status(200).json(result);
+    } catch (error) {
+      console.error('[ReservationController] FinalizePendingScores error:', error.message);
+      return res.status(500).json({ error: 'Failed to finalize scores' });
+    }
+  };
+
   /**
    * POST /reservations/validate-cancellation
    * Validate if user can cancel based on membership timing rules
@@ -295,5 +343,7 @@ export default function ReservationController(reservationService, models) {
     getDateRange,
     canCreateOpenMatch,
     validateCancellation,
+    updateScore,
+    finalizePendingScores,
   };
 }

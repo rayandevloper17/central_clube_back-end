@@ -1,6 +1,6 @@
 import { Sequelize, DataTypes } from 'sequelize';
 
-export default function(sequelize) {
+export default function (sequelize) {
   return sequelize.define('reservation', {
     id: {
       autoIncrement: true,
@@ -16,22 +16,22 @@ export default function(sequelize) {
         key: 'id'
       }
     },
-      id_terrain: {
-        type: DataTypes.BIGINT,
-        allowNull: false,
-        references: {
-          model: 'terrain',
-          key: 'id'
-        }
-      },
-      id_plage_horaire: {
-        type: DataTypes.BIGINT,
-        allowNull: false,
-        references: {
-          model: 'plage_horaire',
-          key: 'id'
-        }
-      },
+    id_terrain: {
+      type: DataTypes.BIGINT,
+      allowNull: false,
+      references: {
+        model: 'terrain',
+        key: 'id'
+      }
+    },
+    id_plage_horaire: {
+      type: DataTypes.BIGINT,
+      allowNull: false,
+      references: {
+        model: 'plage_horaire',
+        key: 'id'
+      }
+    },
     id_plage_horaire: {
       type: DataTypes.BIGINT,
       allowNull: false
@@ -86,56 +86,46 @@ export default function(sequelize) {
       type: DataTypes.TEXT,
       allowNull: true
     },
-    scoormatch: {
-      type: DataTypes.TEXT,
-      allowNull: true
-    },
-    // Match score fields
-    teamwin: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-    },
-    supertiebreak: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-    },
-    min: {
-      type: DataTypes.DOUBLE,
-      allowNull: true
-    },
-
-    max: {
-      type: DataTypes.DOUBLE,
-      allowNull: true
-    },
-    // Match score fields - using lowercase to match database schema
-    p1A: { type: DataTypes.TEXT, allowNull: true },
-    p2A: { type: DataTypes.TEXT, allowNull: true },
-    p1A: { type: DataTypes.TEXT, allowNull: true },
-    p2A: { type: DataTypes.TEXT, allowNull: true },
+    // ════════════════════════════════════════════════════════════════════════════
+    // SCORE & MATCH LOGIC (STRICT - NEW)
+    // ════════════════════════════════════════════════════════════════════════════
     Set1A: { type: DataTypes.INTEGER, allowNull: true },
     Set1B: { type: DataTypes.INTEGER, allowNull: true },
     Set2A: { type: DataTypes.INTEGER, allowNull: true },
     Set2B: { type: DataTypes.INTEGER, allowNull: true },
     Set3A: { type: DataTypes.INTEGER, allowNull: true },
     Set3B: { type: DataTypes.INTEGER, allowNull: true },
+
+    scoormatch: { type: DataTypes.TEXT, allowNull: true },
+    teamwin: { type: DataTypes.INTEGER, allowNull: true },
+    supertiebreak: { type: DataTypes.INTEGER, allowNull: true },
+
     score_status: {
       type: DataTypes.INTEGER,
       allowNull: true,
-      defaultValue: 0
+      defaultValue: null
     },
+
+    last_score_update: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+
+    last_score_submitter: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+    },
+
+    // Legacy fields (kept for backward compat or reference, but logic will use new fields)
+    p1A: { type: DataTypes.TEXT, allowNull: true },
+    p2A: { type: DataTypes.TEXT, allowNull: true },
+    p1B: { type: DataTypes.TEXT, allowNull: true }, // Fixed typo in user request
+    p2B: { type: DataTypes.TEXT, allowNull: true }, // Fixed typo in user request
+
     ispayed: {
       type: DataTypes.INTEGER,
       allowNull: true,
       defaultValue: 0
-    },
-    last_score_update: {
-      type: DataTypes.DATE,
-      allowNull: true,
-    },
-    last_score_submitter: {
-      type: DataTypes.BIGINT,
-      allowNull: true,
     },
   }, {
     sequelize,

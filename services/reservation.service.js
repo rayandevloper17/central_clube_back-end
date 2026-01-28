@@ -1375,6 +1375,262 @@ export default function ReservationService(models) {
     }
   };
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // SCORE LOGIC: Validate a single Set
+  // ════════════════════════════════════════════════════════════════════════════
+  const validateSet = (setIndex, a, b, isSuperTieBreak) => {
+    const scoreA = Number(a);
+    const scoreB = Number(b);
+
+    if (!Number.isFinite(scoreA) || !Number.isFinite(scoreB) || scoreA < 0 || scoreB < 0) {
+      throw new Error(`Invalid score values for Set ${setIndex + 1}`);
+    }
+
+    const diff = Math.abs(scoreA - scoreB);
+    const max = Math.max(scoreA, scoreB);
+    const min = Math.min(scoreA, scoreB);
+
+    // Set 3: Super Tie-Break Mode
+    if (setIndex === 2 && isSuperTieBreak) {
+      // Must reach at least 10, diff >= 2
+      // Valid: 10-8, 11-9, 12-10
+      // Invalid: 10-9, 9-9
+      if (max < 10) return false;
+      if (diff < 2) return false;
+      return true;
+    }
+
+    // Normal Set (Set 1, 2, or 3-Normal)
+    // Valid outcomes:
+    // 6-0 to 6-4 (max=6, diff>=2)
+    // 7-5 (max=7, min=5)
+    // 7-6 (max=7, min=6) - Tie-break
+    // Any other 7-x is invalid (e.g. 7-4 means it should have ended at 6-4)
+    // 8+ games is invalid
+
+    if (max > 7) return false; // No set goes beyond 7 games
+
+    if (max === 6) {
+      // Must win by 2 (6-0 ... 6-4)
+      return diff >= 2;
+    }
+
+    if (max === 7) {
+      // Must be 7-5 or 7-6
+      return min === 5 || min === 6;
+    }
+
+    return false; // Less than 6 games played (e.g. 5-5 is invalid final score)
+  };
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // SCORE LOGIC: Determine Winner (First to 2 sets)
+  // ════════════════════════════════════════════════════════════════════════════
+  const determineWinner = (sets) => {
+    let winsA = 0;
+    let winsB = 0;
+
+    for (const s of sets) {
+      if (s.a > s.b) winsA++;
+      else if (s.b > s.a) winsB++; // Draw impossible in valid set
+
+      if (winsA === 2) return 1; // Team A = 1
+      if (winsB === 2) return 2; // Team B = 2
+    }
+    return null; // Match not finished or draw (shouldn't happen in padel)
+  };
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // SCORE LOGIC: Update Score (Main Business Logic)
+  // ════════════════════════════════════════════════════════════════════════════
+  const updateScore = async (reservationId, scoreData, submitterId) => {
+    const t = await models.sequelize.transaction();
+    try {
+      const reservation = await models.reservation.findByPk(reservationId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
+
+      if (!reservation) throw new Error('Reservation not found');
+
+      // 1. Check if locked
+      if (reservation.score_status === 1 || reservation.score_status === 2) {
+        throw new Error('Score is already confirmed and cannot be modified.');
+      }
+
+      const { set1, set2, set3, set3_mode } = scoreData;
+      const isSuperTieBreak = set3_mode === 'SUPER_TIE_BREAK';
+
+      // 2. Validate Sets
+      const sets = [];
+
+      // Set 1
+      if (!validateSet(0, set1.a, set1.b, false)) {
+        throw new Error('Invalid score for Set 1 (Must be 6-x, 7-5, or 7-6)');
+      }
+      sets.push({ a: set1.a, b: set1.b });
+
+      // Set 2
+      if (!validateSet(1, set2.a, set2.b, false)) {
+        throw new Error('Invalid score for Set 2');
+      }
+      sets.push({ a: set2.a, b: set2.b });
+
+      // Determine interim state to see if Set 3 is needed
+      let tempWinner = determineWinner(sets);
+
+      // Set 3 (Only if 1-1 split)
+      if (!tempWinner) {
+        if (!set3) throw new Error('Set 3 score is required for a 1-1 match');
+
+        if (!validateSet(2, set3.a, set3.b, isSuperTieBreak)) {
+          throw new Error(isSuperTieBreak
+            ? 'Invalid Super Tie-Break score (Must be >=10 pts, diff >=2)'
+            : 'Invalid score for Set 3'
+          );
+        }
+        sets.push({ a: set3.a, b: set3.b });
+        tempWinner = determineWinner(sets);
+      }
+
+      if (!tempWinner) {
+        throw new Error('Match must have a winner (Best of 3)');
+      }
+
+      // 3. Compare with Existing (if PENDING)
+      let newStatus = 0; // 0 = PENDING
+      let confirmedAt = null;
+
+      if (reservation.score_status === 0 && reservation.last_score_submitter !== submitterId) {
+        // Someone else submitted before. Compare scores.
+        const sameScore =
+          reservation.Set1A === set1.a && reservation.Set1B === set1.b &&
+          reservation.Set2A === set2.a && reservation.Set2B === set2.b &&
+          (sets.length < 3 || (reservation.Set3A === set3.a && reservation.Set3B === set3.b)) &&
+          reservation.teamwin === tempWinner;
+
+        if (sameScore) {
+          newStatus = 1; // 1 = CONFIRMED
+          confirmedAt = new Date();
+        } else {
+          newStatus = 3; // 3 = CONFLICT
+        }
+      }
+
+      // 4. Update DB
+      await reservation.update({
+        Set1A: set1.a,
+        Set1B: set1.b,
+        Set2A: set2.a,
+        Set2B: set2.b,
+        Set3A: sets[2] ? sets[2].a : null,
+        Set3B: sets[2] ? sets[2].b : null,
+        supertiebreak: isSuperTieBreak ? 1 : 0,
+        score_status: newStatus,
+        teamwin: tempWinner,
+        last_score_submitter: submitterId,
+        last_score_update: confirmedAt || new Date()
+      }, { transaction: t });
+
+
+
+      await t.commit();
+
+      // ─────────────────────────────────────────────────────────────────────────────
+      // NOTIFICATIONS
+      // ─────────────────────────────────────────────────────────────────────────────
+      try {
+        // Fetch participants (excluding submitter) to notify them
+        const participants = await models.participant.findAll({
+          where: { id_reservation: reservationId },
+          include: [{
+            model: models.utilisateur,
+            as: 'utilisateur',
+            attributes: ['id', 'fcm_token', 'nom', 'prenom']
+          }]
+        });
+
+        // 1. Get tokens of OTHER players
+        const recipients = participants
+          .map(p => p.utilisateur)
+          .filter(u => u && u.id != submitterId && u.fcm_token);
+
+        const tokens = recipients.map(u => u.fcm_token);
+        const submitterName = participants.find(p => p.utilisateur.id == submitterId)?.utilisateur.nom || 'A player';
+
+        if (tokens.length > 0) {
+          const notificationService = (await import('./notification.service.js')).default;
+          let title = '';
+          let body = '';
+          let type = '';
+
+          if (newStatus === 0) { // PENDING
+            title = '🎾 Score Proposed';
+            body = `${submitterName} has proposed a score. Please confirm or contest it.`;
+            type = 'SCORE_PROPOSAL';
+          } else if (newStatus === 1) { // CONFIRMED
+            title = '✅ Match Score Confirmed';
+            body = `The match score has been confirmed!`;
+            type = 'SCORE_CONFIRMED';
+          } else if (newStatus === 3) { // CONFLICT
+            title = '⚠️ Score Conflict';
+            body = `There is a conflict in the reported scores. Please review.`;
+            type = 'SCORE_CONFLICT';
+          }
+
+          if (title) {
+            await notificationService.sendMulticast(tokens, title, body, {
+              type: type,
+              reservationId: reservationId.toString(),
+              submitterId: submitterId.toString()
+            });
+            console.log(`🔔 Notification sent to ${tokens.length} users: ${title}`);
+          }
+        }
+      } catch (notifError) {
+        console.error('❌ Failed to send score notification:', notifError);
+        // Do not throw; update was successful
+      }
+
+      return reservation;
+
+    } catch (error) {
+      await t.rollback();
+      throw error;
+    }
+  };
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // JOB: Finalize Pending Scores (> 24h)
+  // ════════════════════════════════════════════════════════════════════════════
+  const finalizePendingScores = async () => {
+    const t = await models.sequelize.transaction();
+    try {
+      const yesterday = new Date(new Date() - 24 * 60 * 60 * 1000);
+
+      const pendingReservations = await models.reservation.findAll({
+        where: {
+          score_status: 0, // 0 = PENDING
+          updatedAt: { [Op.lt]: yesterday } // Assuming updatedAt tracks submission time
+        },
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
+
+      for (const r of pendingReservations) {
+        await r.update({
+          score_status: 2, // 2 = CONFIRMED_AUTO
+          last_score_update: new Date()
+        }, { transaction: t });
+      }
+
+      await t.commit();
+      return { count: pendingReservations.length };
+    } catch (error) {
+      await t.rollback();
+      throw error;
+    }
+  };
   return {
     create,
     findAll,
@@ -1387,6 +1643,8 @@ export default function ReservationService(models) {
     findAvailableByDate,
     cancel,
     processStatusRefunds,
-    cancelExcessPendingReservations,  // ← Export for use in participant.controller
+    cancelExcessPendingReservations,
+    updateScore,
+    finalizePendingScores,
   };
 }

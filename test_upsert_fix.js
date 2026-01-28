@@ -15,6 +15,8 @@ const seq = new Sequelize(process.env.DB_NAME, process.env.DB_USER, process.env.
 
 async function testPurchase() {
     try {
+
+        
         console.log('\n=== TESTING MEMBERSHIP PURCHASE FIX ===\n');
 
         // Check current membership for user 521
@@ -44,7 +46,7 @@ async function testPurchase() {
         console.log('\n4. After upsert:');
         console.log(afterRows[0]);
 
-        console.log('\n✅ Test completed successfully!');
+        console.log('\n Test completed successfully!');
         console.log('The upsert should now work correctly with ON CONFLICT (id_user, id_club)');
 
         process.exit(0);

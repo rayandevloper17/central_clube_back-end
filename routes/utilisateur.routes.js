@@ -7,18 +7,18 @@ import createUtilisateurController from '../controllers/utilisateur.controller.j
 import { authenticateToken, authorizeUser } from '../middlewares/auth.middleware.js';
 import { validateCreditUpdate } from '../middlewares/utilisateur.middleware.js';
 
-import { 
-  validateCreateUser, 
-  validateUpdateUser, 
+import {
+  validateCreateUser,
+  validateUpdateUser,
   validateLogin,
-  validateId 
+  validateId
 } from '../middlewares/utilisateur.middleware.js';
 
 export default (models) => {
   const router = express.Router();
-const utilisateurController = createUtilisateurController(models);
+  const utilisateurController = createUtilisateurController(models);
 
-// 🔓 PUBLIC ROUTES (no authentication needed)
+  // 🔓 PUBLIC ROUTES (no authentication needed)
   router.post('/register', validateCreateUser, utilisateurController.create);
   router.post('/login', validateLogin, utilisateurController.login);
   router.post('/refresh-token', utilisateurController.refreshToken);
@@ -27,13 +27,13 @@ const utilisateurController = createUtilisateurController(models);
   // 🔒 PROTECTED ROUTES (authentication required)
   // Get all users (admin only or for selection purposes)
   router.get('/', authenticateToken, utilisateurController.getAll);
-  
+
   // Get user by ID (users can only access their own data)
   router.get('/:id', authenticateToken, validateId, authorizeUser, utilisateurController.getById);
-  
+
   // Update user (users can only update their own data)11
   router.put('/:id', authenticateToken, validateId, validateUpdateUser, authorizeUser, utilisateurController.update);
-  
+
   // Delete user (users can only delete their own account)
   router.delete('/:id', authenticateToken, validateId, authorizeUser, utilisateurController.delete);
 
@@ -51,6 +51,30 @@ const utilisateurController = createUtilisateurController(models);
   router.put('/profile/me', authenticateToken, validateUpdateUser, (req, res, next) => {
     req.params.id = req.user.id.toString();
     utilisateurController.update(req, res, next);
+  });
+
+  // ✅ NEW: Update FCM Token
+  router.put('/profile/me/fcm-token', authenticateToken, async (req, res) => {
+    try {
+      const { fcm_token } = req.body;
+      if (!fcm_token) {
+        return res.status(400).json({ success: false, message: 'fcm_token is required' });
+      }
+
+      const userId = req.user.id;
+      const user = await models.utilisateur.findByPk(userId);
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      await user.update({ fcm_token });
+      console.log(`🔔 FCM Token updated for user ${userId}`);
+
+      res.json({ success: true, message: 'FCM Token updated' });
+    } catch (error) {
+      console.error('Error updating FCM token:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
   });
 
   // ✅ Upload current user's profile picture
@@ -100,7 +124,7 @@ const utilisateurController = createUtilisateurController(models);
         const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString();
         const host = (req.headers['x-forwarded-host'] || req.get('host') || '').toString();
         const inferredBase = `${proto}://${host}`;
-        const publicBase = (envBase && envBase.trim().length > 0) ? envBase.trim().replace(/\/+$/,'') : inferredBase.replace(/\/+$/,'');
+        const publicBase = (envBase && envBase.trim().length > 0) ? envBase.trim().replace(/\/+$/, '') : inferredBase.replace(/\/+$/, '');
         const relativePath = `/uploads/${req.file.filename}`;
         const fullPublicUrl = `${publicBase}${relativePath}`;
 

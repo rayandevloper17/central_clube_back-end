@@ -1,6 +1,6 @@
 import { Sequelize, DataTypes } from 'sequelize';
 
-export default function(sequelize) {
+export default function (sequelize) {
   return sequelize.define('utilisateur', {
     id: {
       autoIncrement: true,
@@ -80,6 +80,10 @@ export default function(sequelize) {
     },
     positionsurlecourt: {
       type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    fcm_token: {
+      type: DataTypes.TEXT,
       allowNull: true
     }
   }, {

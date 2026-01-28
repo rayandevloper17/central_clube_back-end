@@ -28,11 +28,11 @@ export default function reservationRoutes(reservationController, notificationCon
   router.put('/:id/cancel', authenticateToken, reservationController.cancel);
   router.delete('/:id', authenticateToken, reservationController.remove);
 
-  // NEW: Score management routes (DISABLED - methods not implemented yet)
-  // router.put('/:id/score', authenticateToken, reservationController.updateScore);
-  // router.post('/:id/validate-score', authenticateToken, reservationController.validateScore);
+  // NEW: Score management routes
+  router.put('/:id/score', authenticateToken, reservationController.updateScore);
+  router.post('/finalize-pending-scores', authenticateToken, reservationController.finalizePendingScores);
+  // router.post('/:id/validate-score', authenticateToken, reservationController.validateScore); // Deprecated by updateScore
   // router.get('/:id/score-status', authenticateToken, reservationController.getScoreStatus);
-  // router.post('/finalize-pending-scores', authenticateToken, reservationController.finalizePendingScores);
 
   // NEW: Membership-based reservation endpoints
   router.get('/date-range/:userId/:clubId', authenticateToken, reservationController.getDateRange);

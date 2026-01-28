@@ -149,7 +149,7 @@ async function setupDatabase() {
         console.log('========================================\n');
         console.log('Next steps:');
         console.log('1. Restart your backend server (Ctrl+C and run: node index.js)');
-        console.log('2. Test API: GET https://api.padel-mindset.com/api/memberships/user/' + users[0].id + '/club/1');
+        console.log('2. Test API: GET http://192.168.1.44:3001/api/memberships/user/' + users[0].id + '/club/1');
         console.log('3. Hot restart your Flutter app');
         console.log('4. Check Profile page for membership display\n');
 
