@@ -1,5 +1,4 @@
-// Persistent notification logic - now checks for database model
-// If model exists, saves to DB. Otherwise, falls back to in-memory (legacy support)
+import notificationService from '../services/notification.service.js';
 
 let _notifications = [];
 let _nextId = 1;
@@ -25,7 +24,7 @@ export async function addNotification({ recipient_id, reservation_id, submitter_
 
       // Enrich message if needed (e.g. if message is template-like)
       let finalMessage = message;
-      if (message.includes('{submitter}')) {
+      if (message && message.includes('{submitter}')) {
         finalMessage = message.replace('{submitter}', submitterName);
       }
 
@@ -40,6 +39,29 @@ export async function addNotification({ recipient_id, reservation_id, submitter_
         created_at: new Date(),
         read_at: null // ✅ Explicitly set to null
       });
+
+      // 🔥 FIREBASE PUSH NOTIFICATION LOGIC
+      if (_models.utilisateur && recipient_id) {
+        const recipient = await _models.utilisateur.findByPk(recipient_id);
+        if (recipient && recipient.fcm_token) {
+          const title = 'Padel Mindset'; // Default title
+          console.log(`🚀 Sending FCM to user ${recipient_id} (Token: ${recipient.fcm_token.substring(0, 10)}...)`);
+          await notificationService.sendMulticast(
+            [recipient.fcm_token],
+            title,
+            finalMessage,
+            {
+              type: type || 'info',
+              reservationId: reservation_id ? String(reservation_id) : '',
+              submitterId: submitter_id ? String(submitter_id) : '',
+              click_action: 'FLUTTER_NOTIFICATION_CLICK'
+            }
+          );
+        } else {
+          console.log(`⚠️ User ${recipient_id} has no FCM token.`);
+        }
+      }
+
       return notif;
     } catch (err) {
       console.error('Failed to save notification to DB:', err);
