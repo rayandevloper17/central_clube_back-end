@@ -2,7 +2,7 @@
 # Open in browser or REST client
 
 ## Get ALL memberships (requires authentication token)
-GET http://192.168.1.44:3001/api/memberships/all
+GET https://api.padel-mindset.com/api/memberships/all
 Authorization: Bearer YOUR_TOKEN_HERE
 
 ---
@@ -29,5 +29,5 @@ import('dotenv').then(dotenv => {
 ```
 
 ## Check specific user 521
-GET http://192.168.1.44:3001/api/memberships/user/521/club/1  
+GET https://api.padel-mindset.com/api/memberships/user/521/club/1  
 Authorization: Bearer YOUR_TOKEN_HERE

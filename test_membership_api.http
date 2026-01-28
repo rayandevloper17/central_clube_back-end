@@ -1,8 +1,8 @@
 ### Test Membership API Endpoints
-### Replace {{baseUrl}} with http://192.168.1.44:3001/api
+### Replace {{baseUrl}} with https://api.padel-mindset.com/api
 ### Replace {{token}} with your actual JWT token
 
-@baseUrl = http://192.168.1.44:3001/api
+@baseUrl = https://api.padel-mindset.com/api
 @token = YOUR_JWT_TOKEN_HERE
 @userId = 521
 @clubId = 1
