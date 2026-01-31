@@ -1570,7 +1570,8 @@ export default function ReservationService(models) {
             type = 'SCORE_PROPOSAL';
           } else if (newStatus === 1) { // CONFIRMED
             title = '✅ Match Score Confirmed';
-            body = `The match score has been confirmed!`;
+            const winnerText = reservation.teamwin === 1 ? 'Team A' : 'Team B';
+            body = `The match score has been confirmed! Winner: ${winnerText}`;
             type = 'SCORE_CONFIRMED';
           } else if (newStatus === 3) { // CONFLICT
             title = '⚠️ Score Conflict';
