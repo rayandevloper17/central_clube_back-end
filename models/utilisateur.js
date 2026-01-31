@@ -21,6 +21,10 @@ export default function (sequelize) {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    numero_telephone: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     mot_de_passe: {
       type: DataTypes.TEXT,
       allowNull: true
@@ -84,6 +88,14 @@ export default function (sequelize) {
     },
     fcm_token: {
       type: DataTypes.TEXT,
+      allowNull: true
+    },
+    gender: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    date_naissance: {
+      type: DataTypes.DATE,
       allowNull: true
     }
   }, {
