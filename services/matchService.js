@@ -1,3 +1,5 @@
+import { generateNumericCode } from '../utils/codeGenerator.js';
+
 export const createMatchService = async (models, data) => {
   const reservation = await models.reservation.findByPk(data.id_reservation);
   if (!reservation) throw new Error('Reservation not found');
@@ -6,7 +8,7 @@ export const createMatchService = async (models, data) => {
     id_reservation: data.id_reservation,
     id_createur: data.id_createur,
     type: data.type,
-    cle_prive: data.cle_prive,
+    cle_prive: data.cle_prive || parseInt(generateNumericCode(6)),
     nombre_joueurs: data.nombre_joueurs,
     etat: data.etat,
   });

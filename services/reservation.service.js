@@ -1,4 +1,5 @@
 import { addNotification } from '../utils/notificationBus.js';
+import { generateReservationCoder } from '../utils/codeGenerator.js';
 import { Op } from 'sequelize';
 
 /**
@@ -792,10 +793,27 @@ export default function ReservationService(models) {
       // ══════════════════════════════════════════════════════════════════════
       // STEP 9: Create the reservation
       // ══════════════════════════════════════════════════════════════════════
+      
+      // Generate a truly unique coder in the backend
+      let uniqueCoder;
+      let isUnique = false;
+      let attempts = 0;
+      
+      while (!isUnique && attempts < 10) {
+        uniqueCoder = generateReservationCoder();
+        const existing = await models.reservation.findOne({ 
+          where: { coder: uniqueCoder },
+          transaction: t
+        });
+        if (!existing) isUnique = true;
+        attempts++;
+      }
+
       // If PayForAll, store the TOTAL amount paid in prix_total so refunds work easily
       // Also set ispayed = 1
       const payload = {
         ...data,
+        coder: uniqueCoder, // Override any frontend-provided coder
         prix_total: isPayForAll ? totalChargeToDeduct : normalizedPrice, // Store actual unit cost or total? Cancel logic uses this.
         // Wait, if I store totalChargeToDeduct (e.g. 4000), and I join. 
         // Join logic sees "prix_total". 
