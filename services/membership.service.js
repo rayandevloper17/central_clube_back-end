@@ -25,7 +25,7 @@ export default function MembershipService(models) {
         1: { // Access
             name: 'Access',
             dateRangeDays: 14,
-            priceDiscount: 0,
+            priceDiscount: 300,
             canCreateOpenMatch: true,
             canJoinOpenMatch: true,
             canCreatePrivateMatch: true,

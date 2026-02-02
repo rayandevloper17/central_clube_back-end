@@ -705,9 +705,9 @@ export default function ReservationService(models) {
       if (membershipType === 4) { // Infinity
         isFree = true;
         console.log(`[ReservationService] 👑 User ${data.id_utilisateur} has INFINITY membership - Match is FREE`);
-      } else if (membershipType === 2 || membershipType === 3) { // Gold (2) or Platinum (3)
+      } else if (membershipType === 1 || membershipType === 2 || membershipType === 3) { // Access (1), Gold (2) or Platinum (3)
         membershipDiscount = 300;
-        console.log(`[ReservationService] 👑 User ${data.id_utilisateur} has Gold/Platinum - Discount: ${membershipDiscount} DA`);
+        console.log(`[ReservationService] 👑 User ${data.id_utilisateur} has Access/Gold/Platinum - Discount: ${membershipDiscount} DA`);
       }
 
       if (limitReached) {
@@ -730,7 +730,8 @@ export default function ReservationService(models) {
       let isPayForAll = false;
 
       // Check for Pay For All flag
-      if (data.payForAll === true || data.payForAll === 'true' || data.payForAll === 1) {
+      if (data.payForAll === true || data.payForAll === 'true' || data.payForAll === 1 ||
+        data.ispayed === true || data.ispayed === 'true' || data.ispayed === 1) {
         isPayForAll = true;
         console.log(`[ReservationService] 💸 "Pay for All" selected by user ${data.id_utilisateur}`);
       }
