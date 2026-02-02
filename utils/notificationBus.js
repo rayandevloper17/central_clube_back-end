@@ -185,6 +185,50 @@ export async function markAllNotificationsRead(userId) {
   return { success: true, message: 'All notifications marked as read' };
 }
 
+// ✅ NEW: Delete a single notification
+export async function deleteNotification(id, userId) {
+  if (_models && _models.notification) {
+    try {
+      const deleted = await _models.notification.destroy({
+        where: { 
+          id: id,
+          recipient_id: userId // Authorization check: only recipient can delete
+        }
+      });
+      return deleted > 0;
+    } catch (err) {
+      console.error('Failed to delete notification from DB:', err);
+      return false;
+    }
+  }
+
+  const idx = _notifications.findIndex(n => String(n.id) === String(id) && String(n.recipient_id) === String(userId));
+  if (idx >= 0) {
+    _notifications.splice(idx, 1);
+    return true;
+  }
+  return false;
+}
+
+// ✅ NEW: Delete all notifications for a user
+export async function deleteAllNotifications(userId) {
+  if (_models && _models.notification) {
+    try {
+      const deleted = await _models.notification.destroy({
+        where: { recipient_id: userId }
+      });
+      return { success: true, count: deleted };
+    } catch (err) {
+      console.error('Failed to clear all notifications from DB:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  const initialCount = _notifications.length;
+  _notifications = _notifications.filter(n => String(n.recipient_id) !== String(userId));
+  return { success: true, count: initialCount - _notifications.length };
+}
+
 export function removeAll() {
   _notifications = [];
   _nextId = 1;

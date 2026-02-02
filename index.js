@@ -27,7 +27,7 @@ import matchRoutes from './routes/matchRoutes.js';
 import reservationUtilisateurRoutes from './routes/reservationUtilisateur.routes.js';
 import createVerificationEmailRoutes from './routes/emailVerification.route.js';
 import createMembershipRoutes from './routes/membership.routes.js'; // ✅ NEW: Membership routes
-import { addNotification, getNotificationsForUser, markNotificationRead, markAllNotificationsRead, setNotificationModels } from './utils/notificationBus.js';
+import { addNotification, getNotificationsForUser, markNotificationRead, markAllNotificationsRead, deleteNotification, deleteAllNotifications, setNotificationModels } from './utils/notificationBus.js';
 
 // Initialize Sequelize
 const sequelize = new Sequelize(
@@ -355,6 +355,34 @@ app.put('/api/notifications/user/:userId/read-all', authenticateToken, async (re
   try {
     const userId = req.params.userId;
     const result = await markAllNotificationsRead(userId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ NEW: Delete a single notification
+app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const userId = req.user.id; // From authenticateToken middleware
+    const success = await deleteNotification(id, userId);
+    if (!success) return res.status(404).json({ error: 'Notification not found or unauthorized' });
+    res.json({ success: true, message: 'Notification deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ NEW: Clear all notifications for a user
+app.delete('/api/notifications/user/:userId/all', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    // Basic security: only allow user to clear their own notifications
+    if (String(req.user.id) !== String(userId)) {
+      return res.status(403).json({ error: 'Unauthorized to clear these notifications' });
+    }
+    const result = await deleteAllNotifications(userId);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
